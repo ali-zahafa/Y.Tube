@@ -1350,7 +1350,12 @@ private class ShortsPreloader(context: Context) {
     private val manager = builder.build()
 
     val player: ExoPlayer = builder.buildExoPlayer(
-        ExoPlayer.Builder(context).setBandwidthMeter(PlaybackBandwidth.get()),
+        ExoPlayer.Builder(context)
+            .setBandwidthMeter(PlaybackBandwidth.get())
+            // Shorts used to ignore audio focus entirely, so they kept talking over phone
+            // calls and played on top of the main player. Let Media3 manage focus here too.
+            .setAudioAttributes(MediaAudio.attributes, true)
+            .setHandleAudioBecomingNoisy(true),
     ).apply {
         videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
         repeatMode = Player.REPEAT_MODE_ONE

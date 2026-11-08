@@ -1505,7 +1505,9 @@ fun BitChordMusicPlayer(
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                     ) {
                         Text(
-                            "HQ AUDIO · 256 KBPS AAC",
+                            // Shows the codec and bitrate actually being played; it used to
+                            // claim "256 KBPS AAC" for every track, which YouTube rarely serves.
+                            (state.playingAudioFormat?.let { "AUDIO · $it" } ?: "AUDIO").uppercase(java.util.Locale.US),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.8.sp,

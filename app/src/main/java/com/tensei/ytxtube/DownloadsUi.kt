@@ -165,7 +165,7 @@ fun DownloadQualitySheet(video: VideoItem, onDownloadStarted: ((String) -> Unit)
                         Icon(Icons.Rounded.Download, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (choice == null) "Download" else "Download ${choice.label}${sizeSuffix(choice.estimatedBytes)}",
+                            if (choice == null) "Download" else "Download ${choice.label}${sizeSuffix(choice.estimatedBytes, choice.sizeExact)}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                         )
@@ -201,11 +201,12 @@ private fun QualityChoiceRow(option: DownloadOption, selected: Boolean, onClick:
                 qualityTag(option.height)?.let { append(it) }
                 if (option.estimatedBytes > 0) {
                     if (isNotEmpty()) append(" · ")
+                    // "~" marks a size worked out from the bitrate rather than reported exactly.
+                    if (!option.sizeExact) append("~")
                     append(formatBytes(option.estimatedBytes))
                 }
                 if (isNotEmpty()) append(" · ")
-                append(option.containerLabel)
-                append(if (option.needsMux) " · video + audio" else " · with audio")
+                append(option.formatDetail)
             }
             Text(subtitle, color = c.onSurfaceVariant, fontSize = 11.5.sp)
         }
@@ -357,11 +358,13 @@ private fun DownloadRow(task: DownloadTask, onOpen: (() -> Unit)?) {
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    if (task.height > 0) {
-                        "${task.channel} · ${task.height}p${if (task.hdr) " HDR" else ""}"
-                    } else {
-                        "${task.channel} · Audio"
-                    },
+                    listOf(
+                        task.channel,
+                        if (task.height > 0) "${task.height}p${if (task.hdr) " HDR" else ""}" else "Audio",
+                        task.detail.ifBlank {
+                            DownloadFormats.containerLabel(task.container, audioOnly = task.height == 0)
+                        },
+                    ).filter { it.isNotBlank() }.joinToString(" · "),
                     color = c.onSurfaceVariant,
                     fontSize = 11.5.sp,
                     maxLines = 1,
@@ -396,8 +399,12 @@ private fun DownloadRow(task: DownloadTask, onOpen: (() -> Unit)?) {
                             text = { Text("Pause") },
                             onClick = { menu = false; Downloads.pause(task) },
                         )
-                        DownloadStatus.Paused, DownloadStatus.Failed -> DropdownMenuItem(
+                        DownloadStatus.Paused -> DropdownMenuItem(
                             text = { Text("Resume") },
+                            onClick = { menu = false; Downloads.resume(task) },
+                        )
+                        DownloadStatus.Failed -> DropdownMenuItem(
+                            text = { Text("Retry") },
                             onClick = { menu = false; Downloads.resume(task) },
                         )
                         DownloadStatus.Complete -> DropdownMenuItem(
@@ -450,7 +457,7 @@ private fun DownloadRow(task: DownloadTask, onOpen: (() -> Unit)?) {
 }
 
 private fun statusText(task: DownloadTask): String = when (task.status) {
-    DownloadStatus.Complete -> "Downloaded · ${formatBytes(task.file.length())}"
+    DownloadStatus.Complete -> if (task.file.exists()) "Downloaded · ${formatBytes(task.file.length())}" else "File missing from the download folder"
     DownloadStatus.Downloading -> "Downloading ${(task.progress * 100).toInt()}%"
     DownloadStatus.Processing -> "Combining video and audio…"
     DownloadStatus.Queued -> "Waiting to download"
@@ -476,8 +483,8 @@ private fun qualityTag(height: Int): String? = when {
     else -> null
 }
 
-private fun sizeSuffix(bytes: Long): String =
-    if (bytes > 0) " · ${formatBytes(bytes)}" else ""
+private fun sizeSuffix(bytes: Long, exact: Boolean): String =
+    if (bytes > 0) " · ${if (exact) "" else "~"}${formatBytes(bytes)}" else ""
 
 fun formatBytes(bytes: Long): String {
     if (bytes <= 0) return "0 MB"

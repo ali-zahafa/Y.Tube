@@ -712,7 +712,7 @@ fun MusicTrackOptionsSheet(
                         color = c.onSurface,
                     )
                     Text(
-                        "High quality audio (256 kbps)",
+                        "M4A (AAC), best quality YouTube offers for this track",
                         fontSize = 11.5.sp,
                         color = c.onSurfaceVariant.copy(alpha = 0.7f),
                     )

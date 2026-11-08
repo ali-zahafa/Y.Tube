@@ -170,6 +170,10 @@ class PlayerState(private val scope: CoroutineScope) {
     var playingFormat by mutableStateOf<String?>(null)
         private set
 
+    /** Audio format actually being decoded, e.g. "AAC · 129 kbps"; null until tracks are known. */
+    var playingAudioFormat by mutableStateOf<String?>(null)
+        private set
+
     var decodedHeight by mutableStateOf<Int?>(null)
         private set
 
@@ -286,11 +290,13 @@ class PlayerState(private val scope: CoroutineScope) {
         if (isMusicMode) RecentMusic.record(item)
         details = null
         error = null
+        errorFromPlayback = false
         firstFrameRendered = false
         videoAspect = 16f / 9f
         aspectFromFrames = false
         decodedHeight = null
         playingFormat = null
+        playingAudioFormat = null
         loading = true
         sheet = null
         comments.clearFor(item.id)
@@ -896,7 +902,24 @@ class PlayerState(private val scope: CoroutineScope) {
 
 
 
-    fun setBackground(background: Boolean) {
+    fun setBackground(
+        background: Boolean,
+        changingConfigurations: Boolean = false,
+    ) {
+        if (background) {
+            val action = BackgroundPlaybackPolicy.onBackground(
+                backgroundEnabled = BackgroundPlaybackSettings.enabled,
+                changingConfigurations = changingConfigurations,
+                hasMedia = (controller?.mediaItemCount ?: 0) > 0,
+            )
+            if (action == BackgroundPlaybackPolicy.OnBackground.None && changingConfigurations) return
+            if (action == BackgroundPlaybackPolicy.OnBackground.Pause) {
+                // Background playback is off: pause instead of continuing audio-only. This
+                // goes through the session, so the notification and lock screen stay in sync.
+                Log.i(TAG, "app left the foreground with background playback off; pausing")
+                controller?.pause()
+            }
+        }
         if (wantBackground == background) return
         wantBackground = background
         if (isMusicMode) return
@@ -910,6 +933,9 @@ class PlayerState(private val scope: CoroutineScope) {
 
 
     private var wantBackground = false
+
+    /** [error] came from the player (not from loading details), so recovery may clear it. */
+    private var errorFromPlayback = false
 
 
     private fun applyVideoTrack() {
@@ -1000,6 +1026,11 @@ class PlayerState(private val scope: CoroutineScope) {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY && errorFromPlayback) {
+                // The service recovered by itself (network back, stream re-extracted).
+                errorFromPlayback = false
+                error = null
+            }
             if (playbackState == Player.STATE_ENDED) {
                 val p = controller ?: return
                 if (p.repeatMode == Player.REPEAT_MODE_ONE) return
@@ -1035,6 +1066,7 @@ class PlayerState(private val scope: CoroutineScope) {
         override fun onVideoSizeChanged(videoSize: VideoSize) = takeVideoSize(videoSize)
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+            playingAudioFormat = describeAudio(tracks)
             val vs = controller?.videoSize ?: return
             if (vs.width <= 0 || vs.height <= 0) return
             val w = (vs.width * vs.pixelWidthHeightRatio).roundToInt()
@@ -1051,13 +1083,30 @@ class PlayerState(private val scope: CoroutineScope) {
             Log.w(TAG, "playback error ${e.errorCodeName}${status?.let { " (HTTP $it)" } ?: ""} for ${current?.id}", e)
 
             if (e.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && StreamRecovery.recovering == current?.id) return
+            errorFromPlayback = true
             error = when (e.errorCode) {
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Lost the connection. Check your network and try again."
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Lost the connection. Playback resumes when you're back online, or try again."
                 PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "YouTube refused the stream. Try again."
                 else -> "This video couldn't be played."
             }
         }
+    }
+
+    private fun describeAudio(tracks: androidx.media3.common.Tracks): String? {
+        val format = tracks.groups
+            .filter { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+            .firstNotNullOfOrNull { g -> (0 until g.length).firstOrNull { g.isTrackSelected(it) }?.let(g::getTrackFormat) }
+            ?: return null
+        val codec = DownloadFormats.audioCodecLabel(format.codecs)
+            ?: when (format.sampleMimeType) {
+                androidx.media3.common.MimeTypes.AUDIO_AAC -> "AAC"
+                androidx.media3.common.MimeTypes.AUDIO_OPUS -> "Opus"
+                else -> null
+            }
+        val bitrate = format.averageBitrate.takeIf { it > 0 } ?: format.bitrate.takeIf { it > 0 } ?: format.peakBitrate
+        val kbps = DownloadFormats.kbps(bitrate)
+        return listOfNotNull(codec, kbps.takeIf { it > 0 }?.let { "$it kbps" }).joinToString(" · ").ifBlank { null }
     }
 
     private fun takeVideoSize(videoSize: VideoSize) {

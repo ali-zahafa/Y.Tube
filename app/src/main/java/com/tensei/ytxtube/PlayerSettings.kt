@@ -24,6 +24,30 @@ object PlayerControlSettings {
     }
 }
 
+/**
+ * Background playback: when on (the default, and the app's previous behaviour) audio keeps
+ * playing while the app is minimized, the screen is locked or another app is in front, and
+ * survives swiping the app away from Recents while it is playing. When off, playback pauses
+ * as soon as the app leaves the foreground (PiP still counts as foreground).
+ */
+object BackgroundPlaybackSettings {
+    private const val KEY_ENABLED = "background_playback_enabled"
+    private var prefs: SharedPreferences? = null
+
+    var enabled by mutableStateOf(true)
+        private set
+
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
+        enabled = prefs?.getBoolean(KEY_ENABLED, true) ?: true
+    }
+
+    fun set(on: Boolean) {
+        enabled = on
+        prefs?.edit()?.putBoolean(KEY_ENABLED, on)?.apply()
+    }
+}
+
 object PipSettings {
     private const val KEY_ENABLED = "app_pip_enabled"
     private var prefs: SharedPreferences? = null

@@ -3,6 +3,9 @@ package com.tensei.ytxtube
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.util.Log
 import android.os.Handler
@@ -101,13 +104,13 @@ class PlaybackService : MediaSessionService() {
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build(),
             )
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
- true,
-            )
+            // Media3 owns audio focus (handleAudioFocus = true): it requests focus when
+            // playback starts, pauses on AUDIOFOCUS_LOSS / LOSS_TRANSIENT (calls, voice
+            // assistants), ducks on LOSS_TRANSIENT_CAN_DUCK (navigation prompts), and on
+            // AUDIOFOCUS_GAIN resumes only if playback was paused by the focus loss, never
+            // after a user pause. No other focus manager may be added on top of this.
+            .setAudioAttributes(MediaAudio.attributes, true)
+            // Headphones unplugged / Bluetooth audio disconnected (ACTION_AUDIO_BECOMING_NOISY).
             .setHandleAudioBecomingNoisy(true)
 
 
@@ -121,7 +124,7 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         player.setVideoFrameMetadataListener { _, releaseTimeNs, _, _ -> AvSync.onFrameReleased(releaseTimeNs) }
-        player.addListener(SponsorSkipper(player))
+        sponsorSkipper = SponsorSkipper(player).also(player::addListener)
         player.addListener(SpeedKeeper(player))
 
 
@@ -132,6 +135,7 @@ class PlaybackService : MediaSessionService() {
         }
 
         player.addListener(StreamRecoverer(player, sources, resolver))
+        networkRecoverer = NetworkRecoverer(this, player).also(player::addListener)
         resumeSaver = ResumeSaver(player).also(player::addListener)
         watchTime = WatchTimeReporter(player).also(player::addListener)
         session = MediaSession.Builder(this, player)
@@ -143,17 +147,33 @@ class PlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-
-
+        val player = session?.player
+        val keep = player != null && BackgroundPlaybackPolicy.keepServiceOnTaskRemoved(
+            backgroundEnabled = BackgroundPlaybackSettings.enabled,
+            playWhenReady = player.playWhenReady,
+            hasMedia = player.mediaItemCount > 0,
+            ended = player.playbackState == Player.STATE_ENDED,
+        )
+        if (keep) {
+            // Background playback is on and the user was listening: the session stays in the
+            // foreground with its notification, exactly like being minimized.
+            Log.i("YTXTube", "task removed while playing; background playback keeps the service")
+            return
+        }
         pauseAllPlayersAndStopSelf()
     }
 
     private var resumeSaver: ResumeSaver? = null
     private var watchTime: WatchTimeReporter? = null
+    private var networkRecoverer: NetworkRecoverer? = null
+    private var sponsorSkipper: SponsorSkipper? = null
 
     override fun onDestroy() {
         resumeSaver?.saveNow()
         watchTime?.finish()
+        watchTime?.release()
+        networkRecoverer?.release()
+        sponsorSkipper?.release()
         session?.run {
             player.release()
             release()
@@ -205,6 +225,14 @@ class PlaybackService : MediaSessionService() {
     }
 }
 
+
+/** Audio attributes shared by every player in the app so they negotiate focus with each other. */
+internal object MediaAudio {
+    val attributes: AudioAttributes = AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .build()
+}
 
 object StreamRecovery {
 
@@ -291,6 +319,106 @@ private class StreamRecoverer(
 
 
 
+/**
+ * Resumes playback by itself after a dropped connection. Before this, a network error left
+ * the player stuck on an error screen until the user pressed retry, which reopened the video
+ * from scratch. Here the existing source is simply re-prepared (keeping the position and the
+ * user's play/pause choice) after a short back-off, or as soon as a network becomes available.
+ */
+@OptIn(UnstableApi::class)
+private class NetworkRecoverer(context: Context, private val player: ExoPlayer) : Player.Listener {
+    private val main = Handler(Looper.getMainLooper())
+    private val connectivity = context.getSystemService(ConnectivityManager::class.java)
+    private var failedId: String? = null
+    private var attempts = 0
+    private var callbackRegistered = false
+    private var released = false
+    private val timedRetry = Runnable { tryRecover(fromNetworkCallback = false) }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            main.post {
+                // Registering delivers the current network immediately; that is not a
+                // reconnection, so leave it to the timed back-off.
+                if (android.os.SystemClock.elapsedRealtime() - registeredAt < 1_000L) return@post
+                tryRecover(fromNetworkCallback = true)
+            }
+        }
+    }
+    private var registeredAt = 0L
+
+    override fun onPlayerError(error: PlaybackException) {
+        if (released || !NetworkRetryPolicy.isRecoverable(error.errorCode)) return
+        val item = player.currentMediaItem ?: return
+        if (item.localConfiguration?.uri?.scheme == "file") return
+        if (failedId != item.mediaId) {
+            failedId = item.mediaId
+            attempts = 0
+        }
+        registerCallback()
+        val delay = NetworkRetryPolicy.delayFor(attempts)
+        main.removeCallbacks(timedRetry)
+        if (delay != null) {
+            Log.i("YTXTube", "network error ${error.errorCodeName} for ${item.mediaId}; retrying in ${delay}ms")
+            main.postDelayed(timedRetry, delay)
+        } else {
+            Log.w("YTXTube", "network error for ${item.mediaId}; waiting for a network change")
+        }
+    }
+
+    override fun onPlaybackStateChanged(playbackState: Int) {
+        if (playbackState == Player.STATE_READY) reset()
+    }
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        if (mediaItem?.mediaId != failedId) reset()
+    }
+
+    private fun tryRecover(fromNetworkCallback: Boolean) {
+        if (released) return
+        val error = player.playerError ?: return
+        if (!NetworkRetryPolicy.isRecoverable(error.errorCode)) return
+        if (player.currentMediaItem?.mediaId != failedId) return
+        if (!fromNetworkCallback && !isOnline()) {
+            // Still offline: the network callback will retry when a connection returns.
+            return
+        }
+        if (!fromNetworkCallback) attempts++
+        main.removeCallbacks(timedRetry)
+        Log.i("YTXTube", "re-preparing $failedId after network error (${if (fromNetworkCallback) "network back" else "attempt $attempts"})")
+        // prepare() keeps the position and playWhenReady, so a video the user paused stays paused.
+        player.prepare()
+    }
+
+    private fun isOnline(): Boolean = runCatching {
+        val caps = connectivity?.getNetworkCapabilities(connectivity.activeNetwork)
+        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    }.getOrDefault(true)
+
+    private fun registerCallback() {
+        if (callbackRegistered || connectivity == null) return
+        registeredAt = android.os.SystemClock.elapsedRealtime()
+        callbackRegistered = runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }.isSuccess
+    }
+
+    private fun unregisterCallback() {
+        if (!callbackRegistered) return
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
+        callbackRegistered = false
+    }
+
+    private fun reset() {
+        failedId = null
+        attempts = 0
+        main.removeCallbacks(timedRetry)
+        unregisterCallback()
+    }
+
+    fun release() {
+        released = true
+        reset()
+    }
+}
+
 @OptIn(UnstableApi::class)
 private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener {
     private val main = Handler(Looper.getMainLooper())
@@ -349,6 +477,12 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
         session = null
         starts.clear(); ends.clear()
         pings = 0
+    }
+
+    /** Stops the ping timer and lets the final ping queued by [finish] drain before the thread ends. */
+    fun release() {
+        main.removeCallbacks(tick)
+        io.shutdown()
     }
 
     private fun startStretch() {
@@ -429,9 +563,11 @@ private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         val id = mediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
+        if (released) return
         io.execute {
             val segments = SponsorBlock.fetch(id)
             main.post {
+                if (released) return@post
                 SponsorBlock.forUi[id] = segments
 
                 if (player.currentMediaItem?.mediaId != id) return@post
@@ -446,7 +582,16 @@ private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
         }
     }
 
+    private var released = false
+
+    fun release() {
+        released = true
+        main.removeCallbacksAndMessages(null)
+        io.shutdownNow()
+    }
+
     private fun skip(videoId: String, segment: SponsorBlock.Segment) {
+        if (released) return
 
         if (!SponsorBlock.enabled || segment.action != SponsorBlock.Action.Auto) return
         if (player.currentMediaItem?.mediaId != videoId) return
@@ -463,6 +608,7 @@ private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
         val start = android.os.SystemClock.uptimeMillis()
         val step = object : Runnable {
             override fun run() {
+                if (released) return
                 val t = ((android.os.SystemClock.uptimeMillis() - start).toFloat() / durationMs).coerceIn(0f, 1f)
                 player.volume = from + (to - from) * t
                 if (t < 1f) main.postDelayed(this, 16) else then()

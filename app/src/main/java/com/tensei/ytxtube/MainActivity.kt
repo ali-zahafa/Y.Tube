@@ -126,6 +126,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     internal var playerHolder: PlayerState? = null
     internal var shortsPlayerHolder: androidx.media3.exoplayer.ExoPlayer? = null
     internal var pipController: PipController? = null
@@ -142,7 +143,21 @@ class MainActivity : ComponentActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        requestLegacyStoragePermissionOnce()
         setContent { YtxTubeTheme { YtxTubeApp() } }
+    }
+
+    /**
+     * Android 10 and older need WRITE_EXTERNAL_STORAGE to save into the public Download folder.
+     * Asked once; if refused, downloads still work and go to the app's own folder instead.
+     */
+    private fun requestLegacyStoragePermissionOnce() {
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.Q) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) return
+        val prefs = getSharedPreferences("downloads", MODE_PRIVATE)
+        if (prefs.getBoolean("storage_permission_asked", false)) return
+        prefs.edit().putBoolean("storage_permission_asked", true).apply()
+        storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     }
 
     override fun onResume() {
@@ -332,10 +347,14 @@ fun YtxTubeApp() {
 
 
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val lifecycleActivity = LocalContext.current as? Activity
     DisposableEffect(lifecycle) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_STOP -> player.setBackground(true)
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> player.setBackground(
+                    background = true,
+                    changingConfigurations = lifecycleActivity?.isChangingConfigurations == true,
+                )
                 androidx.lifecycle.Lifecycle.Event.ON_START -> player.setBackground(false)
                 else -> Unit
             }

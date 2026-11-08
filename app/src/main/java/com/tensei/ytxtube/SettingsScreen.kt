@@ -1312,6 +1312,19 @@ private fun GeneralModificationContent(context: Context) {
         HorizontalDivider(color = c.onSurface.copy(alpha = 0.08f))
 
         SettingsSwitchRow(
+            title = I18n.t("background_playback", "Background playback"),
+            subtitle = if (BackgroundPlaybackSettings.enabled) {
+                I18n.t("background_playback_on_sub", "Keep playing audio when the app is minimized or the screen is locked")
+            } else {
+                I18n.t("background_playback_off_sub", "Playback pauses when you leave the app or lock the screen")
+            },
+            checked = BackgroundPlaybackSettings.enabled,
+            onCheckedChange = { BackgroundPlaybackSettings.set(it) },
+        )
+
+        HorizontalDivider(color = c.onSurface.copy(alpha = 0.08f))
+
+        SettingsSwitchRow(
             title = I18n.t("enable_pip", "Picture-in-Picture (PiP)"),
             subtitle = I18n.t("enable_pip_sub", "Allow video to keep playing in a floating window when leaving the app"),
             checked = PipSettings.enabled,
