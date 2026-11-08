@@ -674,15 +674,23 @@ private fun VideoStream.fitsKbps(budgetKbps: Int): Boolean {
     return needed <= budgetKbps
 }
 
+/** 1 when the device decodes this rendition in hardware (or cannot tell), else 0. */
+private fun VideoStream.hardwareRank(): Int = VideoDecoders.hardwareRank(codec, width, height, fps)
+
 private fun videoOrder(hdr: Boolean, formatRank: (MediaFormat?) -> Int): Comparator<VideoStream> =
     compareBy<VideoStream> { it.tier() }
         .thenBy { if (hdr && HdrSupport.isHdr(it)) 1 else 0 }
+        // At the same resolution, a hardware-decodable codec beats a software-only one: a
+        // higher-bitrate AV1 rendition on a device without an AV1 decoder drops frames and
+        // drains the battery, while H.264/VP9 plays smoothly on the hardware decoder.
+        .thenBy { it.hardwareRank() }
         .thenBy { it.fps }
         .thenBy { it.bitrate }
         .thenBy { -formatRank(it.format) }
 
 private fun lowestFirst(formatRank: (MediaFormat?) -> Int): Comparator<VideoStream> =
     compareBy<VideoStream> { it.tier() }
+        .thenBy { -it.hardwareRank() }
         .thenBy { it.fps }
         .thenBy { it.bitrate }
         .thenBy { formatRank(it.format) }
@@ -967,9 +975,23 @@ object StreamSelection {
 
     fun autoLadder(info: StreamInfo, maxTier: Int = MAX_TIER): List<VideoStream> {
         val hdr = QualityPreference.hdr && HdrSupport.isSupported
-        val usable = usableVideos(info, hdr).filter {
+        val all = usableVideos(info, hdr).filter {
             it.tier() in 1..maxTier && it.itagItem != null
         }
+        // One codec family only, preferring one the hardware decodes (see CodecLadder).
+        val byFamily = all.groupBy { VideoCodecFamily.of(it.codec) }
+            .mapValues { (family, streams) -> streams.filter { VideoDecoders.canDecode(family, it.width, it.height, it.fps) } }
+        val family = CodecLadder.choose(
+            byFamily.map { (family, streams) ->
+                CodecLadder.Candidate(
+                    family = family,
+                    maxTier = streams.maxOfOrNull { it.tier() } ?: 0,
+                    hardware = VideoDecoders.isHardware(family),
+                    rungs = streams.map { it.tier() }.distinct().size,
+                )
+            },
+        )
+        val usable = family?.let { byFamily[it] }?.takeIf { it.isNotEmpty() } ?: all
         return usable.groupBy { it.tier() }
             .map { (_, sameTier) ->
                 sameTier.maxWith(

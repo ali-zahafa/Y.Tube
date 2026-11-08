@@ -37,6 +37,7 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
         HdrItags.install()
         ThemeSettings.init(this)
         HdrSupport.init(this)
+        Thread({ VideoDecoders.warmUp() }, "decoder-probe").start()
         QualityPreference.init(this)
         PlaybackSpeed.init(this)
         AudioOnly.init(this)

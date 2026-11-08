@@ -116,6 +116,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -1345,6 +1346,9 @@ private class ShortsPreloader(context: Context) {
     )
         .setLoadControl(loadControl)
         .setBandwidthMeter(PlaybackBandwidth.get())
+        // The preload manager hands its renderers factory to the player it builds, so decoder
+        // fallback (try the next decoder if the hardware one fails to start) is set here.
+        .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
         .setDataSourceFactory(MediaCache.dataSourceFactory(context))
 
     private val manager = builder.build()

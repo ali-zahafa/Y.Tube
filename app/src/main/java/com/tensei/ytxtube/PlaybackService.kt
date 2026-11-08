@@ -66,7 +66,11 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         val sources = YouTubeMediaSourceFactory(this)
-        val player = ExoPlayer.Builder(this, SyncedRenderersFactory(this))
+        // Decoder fallback: if the preferred (hardware) decoder fails to initialise, for example
+        // because another app holds it or the stream's profile is beyond it, try the next
+        // decoder instead of failing playback outright.
+        val renderers = SyncedRenderersFactory(this).apply { setEnableDecoderFallback(true) }
+        val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(sources)
             .setBandwidthMeter(PlaybackBandwidth.get())
 
@@ -99,7 +103,10 @@ class PlaybackService : MediaSessionService() {
                     // buffer. The old 15 s/50 s/1 s policy is what made every open sit on
                     // a spinner before the first frame.
                     .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, 64 * 1024))
-                    .setBufferDurationsMs(2_500, 30_000, 250, 750)
+                    // Resume after a stall only once 2 s are buffered: with 0.75 s a link that just
+                    // proved too slow played a fraction of a second and stalled again, over and
+                    // over. Startup stays at 0.25 s so first frames still appear immediately.
+                    .setBufferDurationsMs(2_500, 30_000, 250, 2_000)
                     .setBackBuffer(10_000, false)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build(),
