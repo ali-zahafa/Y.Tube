@@ -1326,10 +1326,8 @@ object InnerTube {
                     }
                 }
             }
-            if (key == "continuationItemRenderer" || key == "continuationItemViewModel") {
-                obj.collectStrings("token").firstOrNull()?.let { next = it }
-            }
         }
+        feedContinuation(root)?.let { next = it }
         return FeedPage(out.values.toList(), next)
     }
 
@@ -1995,12 +1993,53 @@ object InnerTube {
                 }
 
 
-                "continuationItemRenderer", "continuationItemViewModel" ->
-                    obj.collectStrings("token").firstOrNull()?.let { next = it }
             }
         }
+        next = feedContinuation(root)
         return FeedPage(videos.values.toList(), next)
     }
+
+    /**
+     * The "next page" token of a feed. Only continuation items in the page's content count:
+     * the channel header's About/description panels carry their own continuation items, and
+     * because the header follows the video grid in the response, taking the last token found
+     * anywhere replaced the grid's real next page with the About panel. Channels then stopped
+     * after their first page of Videos, Shorts or Live.
+     */
+    internal fun feedContinuation(root: JSONObject): String? {
+        val scopes = CONTINUATION_SCOPES.mapNotNull { root.opt(it) }.ifEmpty { listOf(root) }
+        var token: String? = null
+        fun visit(node: Any?) {
+            when (node) {
+                is JSONObject -> {
+                    val keys = node.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (key in NON_CONTENT_KEYS) continue
+                        val value = node.opt(key)
+                        if ((key == "continuationItemRenderer" || key == "continuationItemViewModel") && value is JSONObject) {
+                            value.collectStrings("token").firstOrNull()?.let { token = it }
+                        } else {
+                            visit(value)
+                        }
+                    }
+                }
+                is JSONArray -> for (i in 0 until node.length()) visit(node.opt(i))
+            }
+        }
+        scopes.forEach(::visit)
+        return token
+    }
+
+    private val CONTINUATION_SCOPES = listOf(
+        "contents", "continuationContents",
+        "onResponseReceivedActions", "onResponseReceivedCommands", "onResponseReceivedEndpoints",
+    )
+
+    /** Subtrees whose continuation items load panels, not the next page of the feed. */
+    private val NON_CONTENT_KEYS = setOf(
+        "header", "engagementPanels", "engagementPanel", "showEngagementPanelEndpoint", "frameworkUpdates",
+    )
 
 
     internal fun isMembersOnly(o: JSONObject): Boolean =
@@ -2112,10 +2151,9 @@ object InnerTube {
                         posts.add(CommunityPost(id, author.orEmpty(), avatar, text, image, published, likes))
                     }
                 }
-                "continuationItemRenderer", "continuationItemViewModel" ->
-                    obj.collectStrings("token").firstOrNull()?.let { next = it }
             }
         }
+        next = feedContinuation(root)
         return CommunityPage(posts, next)
     }
 
