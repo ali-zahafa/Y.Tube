@@ -171,7 +171,7 @@ class UpdateState(private val scope: CoroutineScope) {
     fun install(context: Context) {
         val file = downloaded ?: return
         if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
-            error = "Allow installs from Y.Tube, then tap Install again."
+            error = "Allow installs from Y.tube, then tap Install again."
             runCatching {
                 context.startActivity(
                     Intent(
@@ -379,7 +379,7 @@ fun UpdateOverlay(state: UpdateState, backdrop: Backdrop) {
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                "Y.Tube ${update?.version.orEmpty()}" +
+                                "Y.tube ${update?.version.orEmpty()}" +
                                     formatUpdateSize(update?.sizeBytes ?: 0L).let { if (it.isBlank()) "" else " · $it" },
                                 color = c.onSurfaceVariant,
                                 fontSize = 12.5.sp,

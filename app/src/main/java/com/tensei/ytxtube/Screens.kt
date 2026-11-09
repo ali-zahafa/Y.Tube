@@ -215,7 +215,7 @@ fun HomeScreen(
         resetKey = scrollToTop to (lib.home.generation to activeFilter),
         header = {
             Column(Modifier.fillMaxWidth()) {
-                ScreenHeader(title = "Y.Tube", brandMark = true) { HeaderActions(onSearch, onAccount) }
+                ScreenHeader(title = "Y.tube", brandMark = true) { HeaderActions(onSearch, onAccount) }
                 HomeFilterChips(selected = activeFilter, onSelect = { activeFilter = it })
             }
         },

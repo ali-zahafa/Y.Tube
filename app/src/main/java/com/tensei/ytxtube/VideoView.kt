@@ -606,7 +606,7 @@ fun VideoContent(
                     if (pip?.supported == true) {
                         GlassButton(Icons.Rounded.PictureInPictureAlt, "Picture-in-picture", enabled, size = 32.dp, iconSize = 18.dp, backdrop = videoBackdrop) {
                             controlsVisible = false
-                            if (!pip.enter(state.videoAspect)) state.actionMessage = "Picture-in-picture is turned off for Y.Tube in Settings."
+                            if (!pip.enter(state.videoAspect)) state.actionMessage = "Picture-in-picture is turned off for Y.tube in Settings."
                         }
                         Spacer(Modifier.width(6.dp))
                     }
