@@ -39,7 +39,12 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
+      # The APK is built even when unit tests fail, so a known legacy test failure
+      # (InnerTubeParseTest.sharpenYtcChannelAvatar, failing since the initial commit)
+      # does not block testing on a device. The "Unit tests" step above still fails
+      # and still marks this job as failed; nothing about the test result is hidden.
       - name: Build debug APK
+        if: ${{ !cancelled() }}
         run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload unit test reports
@@ -51,6 +56,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload debug APK
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: YTXTube-debug-apk
