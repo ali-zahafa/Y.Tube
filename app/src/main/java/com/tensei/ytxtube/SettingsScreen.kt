@@ -217,7 +217,7 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Rounded.DataUsage,
                         title = I18n.t("storage_usage", "Storage Usage"),
-                        subtitle = I18n.t("storage_sub", "See phone storage & clear YTXTube cache"),
+                        subtitle = I18n.t("storage_sub", "See phone storage & clear Y.Tube cache"),
                         onClick = { activeFloatingSection = SettingsFloatingSection.STORAGE_USAGE },
                     )
                 }
@@ -227,7 +227,7 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Rounded.Info,
                         title = I18n.t("version", "Version"),
-                        subtitle = "YTXTube ${BuildConfig.VERSION_NAME}",
+                        subtitle = "Y.Tube ${BuildConfig.VERSION_NAME}",
                         trailing = {
                             Box(
                                 modifier = Modifier
@@ -339,7 +339,7 @@ fun SettingsScreen(
                 SettingsFloatingSection.STORAGE_USAGE -> {
                     SettingsFloatingDialog(
                         title = I18n.t("storage_usage", "Storage Usage"),
-                        subtitle = I18n.t("storage_sub", "Device memory & YTXTube data"),
+                        subtitle = I18n.t("storage_sub", "Device memory & Y.Tube data"),
                         onDismiss = { activeFloatingSection = null },
                     ) {
                         StorageUsageContent(context = context) {
@@ -1675,7 +1675,7 @@ private fun StorageUsageContent(context: Context, onCacheCleared: () -> Unit) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = I18n.t("used_by_ytxtube", "Used by YTXTube"),
+                text = I18n.t("used_by_ytxtube", "Used by Y.Tube"),
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 14.sp,
                 color = c.onSurface,
@@ -1753,7 +1753,7 @@ private fun StorageUsageContent(context: Context, onCacheCleared: () -> Unit) {
                 }
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = clearedNotice ?: I18n.t("clear_cache_downloads", "Clear YTXTube Cache & Downloads"),
+                    text = clearedNotice ?: I18n.t("clear_cache_downloads", "Clear Y.Tube Cache & Downloads"),
                     color = Color(0xFFEF5350),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.5.sp,

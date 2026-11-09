@@ -438,7 +438,7 @@ object YouTube {
 
         is ContentNotAvailableException ->
             if (t.message.orEmpty().contains("member", ignoreCase = true) || t is org.schabi.newpipe.extractor.exceptions.PaidContentException)
-                "This is a members-only video. YTXTube can't play members-only videos yet."
+                "This is a members-only video. Y.Tube can't play members-only videos yet."
             else "This video isn't available."
         is ReCaptchaException -> "YouTube is rate-limiting requests right now. Try again in a minute."
         is IOException -> "Couldn't reach YouTube. Check your connection."
