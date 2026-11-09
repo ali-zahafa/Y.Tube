@@ -131,9 +131,13 @@ class MainActivity : ComponentActivity() {
     internal var shortsPlayerHolder: androidx.media3.exoplayer.ExoPlayer? = null
     internal var pipController: PipController? = null
     internal var intentHandler: ((Intent) -> Unit)? = null
+    private val exitFromNotification: () -> Unit = { finishAndRemoveTask() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The notification's close button stops playback in the service; it then asks the
+        // visible UI (if any) to leave too, so YTXTube exits completely.
+        AppExit.onExit = exitFromNotification
         enableEdgeToEdge()
         setHighestRefreshRate()
         enableHdrOutput()
@@ -158,6 +162,11 @@ class MainActivity : ComponentActivity() {
         if (prefs.getBoolean("storage_permission_asked", false)) return
         prefs.edit().putBoolean("storage_permission_asked", true).apply()
         storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
+
+    override fun onDestroy() {
+        if (AppExit.onExit === exitFromNotification) AppExit.onExit = null
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -187,7 +196,7 @@ class MainActivity : ComponentActivity() {
         val pip = pipController ?: return
         if (!pip.supported) return
         val p = playerHolder
-        if (p != null && p.isPlaying && !p.isMusicMode) {
+        if (p != null && p.isPlaying && !p.isMusicMode && !p.audioOnlyActive) {
             pip.enter(p.videoAspect.takeIf { it > 0 } ?: (16f / 9f))
         }
     }
@@ -397,7 +406,8 @@ fun YtxTubeApp() {
         mainActivity?.pipController = pip
     }
 
-    val isVideoPlaying = player.isPlaying && !player.isMusicMode
+    // "Play in background" means audio only with no floating window, so PiP stays off for it.
+    val isVideoPlaying = player.isPlaying && !player.isMusicMode && !player.audioOnlyActive
     val isShortsPlaying = (tab == Tab.Shorts || shortsEntry != null) && mainActivity?.shortsPlayerHolder?.isPlaying == true
 
     LaunchedEffect(isVideoPlaying, isShortsPlaying, player.videoAspect) {

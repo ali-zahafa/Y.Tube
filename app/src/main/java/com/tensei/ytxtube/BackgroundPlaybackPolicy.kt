@@ -49,6 +49,13 @@ object BackgroundPlaybackPolicy {
         savedEnabled || (overrideVideoId != null && overrideVideoId == currentVideoId)
 
     /**
+     * Whether the playback notification (foreground service) stays up. It stays while something
+     * is loaded, playing or paused, and goes only when playback has ended, the queue is empty,
+     * or the user closes it, so a paused video can always be resumed from the notification.
+     */
+    fun keepNotification(hasMedia: Boolean, idle: Boolean, ended: Boolean): Boolean = hasMedia && !idle && !ended
+
+    /**
      * Called when the user swipes the app away from Recents.
      *
      * @return true when the playback service should keep running (and keep its notification),

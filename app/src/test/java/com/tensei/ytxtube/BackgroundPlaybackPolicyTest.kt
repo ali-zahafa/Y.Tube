@@ -64,6 +64,16 @@ class BackgroundPlaybackPolicyTest {
     }
 
     @Test
+    fun notification_staysWhilePaused_goesWhenEndedOrEmpty() {
+        // Paused (READY/BUFFERING with media): the notification must stay so it can be resumed.
+        assertTrue(BackgroundPlaybackPolicy.keepNotification(hasMedia = true, idle = false, ended = false))
+        assertFalse(BackgroundPlaybackPolicy.keepNotification(hasMedia = true, idle = false, ended = true))
+        assertFalse(BackgroundPlaybackPolicy.keepNotification(hasMedia = true, idle = true, ended = false))
+        // Closed from the notification: queue cleared.
+        assertFalse(BackgroundPlaybackPolicy.keepNotification(hasMedia = false, idle = true, ended = false))
+    }
+
+    @Test
     fun taskRemoved_keepsServiceOnlyWhenEnabledAndPlaying() {
         assertTrue(BackgroundPlaybackPolicy.keepServiceOnTaskRemoved(true, playWhenReady = true, hasMedia = true, ended = false))
         assertFalse(BackgroundPlaybackPolicy.keepServiceOnTaskRemoved(false, playWhenReady = true, hasMedia = true, ended = false))

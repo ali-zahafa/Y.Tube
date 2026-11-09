@@ -59,6 +59,12 @@ object BackgroundAudioOverride {
     var videoId: String? = null
 }
 
+/** Lets the playback service close the visible app after the notification's close button. */
+object AppExit {
+    @Volatile
+    var onExit: (() -> Unit)? = null
+}
+
 object PipSettings {
     private const val KEY_ENABLED = "app_pip_enabled"
     private var prefs: SharedPreferences? = null

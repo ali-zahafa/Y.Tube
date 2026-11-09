@@ -611,6 +611,7 @@ private fun SubscribeButton(subscribed: Boolean, onClick: () -> Unit) {
 @Composable
 private fun PlayerActions(state: PlayerState) {
     val context = LocalContext.current
+    val pip = LocalPictureInPicture.current
     val item = state.current
     Row(
         Modifier
@@ -656,6 +657,12 @@ private fun PlayerActions(state: PlayerState) {
                 description = if (state.backgroundAudioActive) "Back to video" else "Play in background (audio only)",
             ) {
                 state.toggleBackgroundAudio()
+                if (state.backgroundAudioActive) {
+                    // Straight to the home screen, audio keeps playing; no floating PiP window
+                    // (auto-PiP is switched off first so leaving does not open one).
+                    pip?.updateAutoPip(false)
+                    (context as? android.app.Activity)?.moveTaskToBack(true)
+                }
             }
             ActionPill(
                 icon = Icons.Rounded.Share,

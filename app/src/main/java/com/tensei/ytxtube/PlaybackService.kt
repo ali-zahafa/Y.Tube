@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Bundle
 import android.util.Log
 import android.os.Handler
 import android.os.Looper
@@ -42,7 +43,12 @@ import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -55,6 +61,9 @@ import java.util.concurrent.Executors
 
 
 
+
+private const val ACTION_CLOSE = "com.tensei.ytxtube.CLOSE"
+private val CLOSE_COMMAND = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -153,6 +162,36 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /**
+     * Keep the playback notification (and the foreground service behind it) while playback is
+     * merely paused. Media3 normally drops out of the foreground on pause; on many phones the
+     * system then kills the background app within a minute or two, taking the notification with
+     * it, so there was no way to resume from the notification. It now stays until playback ends,
+     * the queue is cleared, or the user taps the notification's close button.
+     */
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        val player = session.player
+        val keepWhilePaused = BackgroundPlaybackPolicy.keepNotification(
+            hasMedia = player.mediaItemCount > 0,
+            idle = player.playbackState == Player.STATE_IDLE,
+            ended = player.playbackState == Player.STATE_ENDED,
+        )
+        super.onUpdateNotification(session, startInForegroundRequired || keepWhilePaused)
+    }
+
+    /** Notification close button: stop playback, remove the notification and leave the app. */
+    private fun closeFromNotification() {
+        Log.i("YTXTube", "closed from the notification")
+        resumeSaver?.saveNow()
+        BackgroundAudioOverride.videoId = null
+        session?.player?.run {
+            stop()
+            clearMediaItems()
+        }
+        AppExit.onExit?.invoke()
+        stopSelf()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = session?.player
         val keep = player != null && BackgroundPlaybackPolicy.keepServiceOnTaskRemoved(
@@ -200,6 +239,42 @@ class PlaybackService : MediaSessionService() {
 
 
     private inner class SessionCallback : MediaSession.Callback {
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            if (!session.isMediaNotificationController(controller)) return super.onConnect(session, controller)
+            // The system notification / lock screen controller gets an extra close (✕) button.
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(CLOSE_COMMAND).build(),
+                )
+                .setMediaButtonPreferences(
+                    ImmutableList.of(
+                        CommandButton.Builder(CommandButton.ICON_UNDEFINED)
+                            .setDisplayName("Close")
+                            .setCustomIconResId(R.drawable.ic_notification_close)
+                            .setSessionCommand(CLOSE_COMMAND)
+                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .build(),
+                    ),
+                )
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == ACTION_CLOSE) {
+                closeFromNotification()
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,

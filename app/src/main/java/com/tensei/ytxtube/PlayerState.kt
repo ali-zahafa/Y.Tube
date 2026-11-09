@@ -922,7 +922,7 @@ class PlayerState(private val scope: CoroutineScope) {
             BackgroundAudioOverride.videoId = id
             applyVideoTrack()
             controller?.let { if (!it.playWhenReady) it.play() }
-            actionMessage = "Playing in background: audio continues when you leave the app"
+            actionMessage = "Playing in background"
         }
     }
 
