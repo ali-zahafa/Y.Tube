@@ -293,6 +293,8 @@ fun YtxTubeApp() {
     var openPlaylist by remember { mutableStateOf<PlaylistRef?>(null) }
     var openChannel by remember { mutableStateOf<String?>(null) }
     var shortsEntry by remember { mutableStateOf<VideoItem?>(null) }
+    // Channel a Short was opened from, so the Shorts player can swipe through that channel's Shorts.
+    var shortsEntryChannel by remember { mutableStateOf<ChannelState?>(null) }
     var openAllSubscriptions by remember { mutableStateOf(false) }
     var openSearch by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
@@ -754,6 +756,7 @@ fun YtxTubeApp() {
                     onOpen = player::open,
                     onOpenShort = { video ->
                         player.expanded = false
+                        shortsEntryChannel = ch
                         shortsEntry = video
                     },
                     onMessage = { player.actionMessage = it },
@@ -920,6 +923,7 @@ fun YtxTubeApp() {
                     onSearch = { openSearch = true },
                     bottomInset = 12.dp,
                     startItem = entry,
+                    channel = shortsEntryChannel?.takeIf { ch -> ch.shorts.any { it.id == entry.id } },
                     active = openChannel == null && !openSearch,
                     onPlayInBackground = { item, position -> playShortInBackground(item, position) },
                     onOpenChannel = { url ->

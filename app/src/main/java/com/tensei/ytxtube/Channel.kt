@@ -97,7 +97,43 @@ class ChannelState(val url: String, private val scope: CoroutineScope) {
 
     private var next: String? = null
     private var shortsNext: String? = null
+    private var liveNext: String? = null
     val hasMore get() = next != null
+    val hasMoreShorts get() = shortsNext != null
+    val hasMoreLive get() = liveNext != null
+
+    /** A follow-up page is being fetched (separate from the first load of the channel). */
+    var loadingMore by mutableStateOf(false)
+        private set
+    var liveLoadingMore by mutableStateOf(false)
+        private set
+
+    /** The last attempt to fetch the next page of a tab failed; the UI offers a retry. */
+    var pageFailed by mutableStateOf<ChannelTab?>(null)
+        private set
+
+    /**
+     * Fetches the next page; when a page adds nothing new (all duplicates) but YouTube still
+     * returns a continuation, keeps going (bounded) instead of stalling at the bottom.
+     */
+    private suspend fun fetchPages(
+        start: String,
+        fetch: suspend (String) -> FeedPage,
+        known: Set<String>,
+    ): Pair<List<VideoItem>, String?> {
+        var token: String? = start
+        val added = ArrayList<VideoItem>()
+        val seen = HashSet(known)
+        var hops = 0
+        while (token != null && hops < 4) {
+            val page = fetch(token)
+            page.videos.filterTo(added) { seen.add(it.id) }
+            token = page.next?.takeIf { it != token }
+            hops++
+            if (added.isNotEmpty()) break
+        }
+        return added to token
+    }
 
     init { load() }
 
@@ -144,11 +180,29 @@ class ChannelState(val url: String, private val scope: CoroutineScope) {
             runCatching { YouTube.channelLive(d, null) }
                 .onSuccess { p ->
                     liveVideos = p.videos.ifEmpty { videos.filter { it.isLive } }
+                    liveNext = p.next
                 }
                 .onFailure {
                     liveVideos = videos.filter { it.isLive }
                 }
             liveLoading = false
+        }
+    }
+
+    fun loadMoreLive() {
+        val d = details ?: return
+        val page = liveNext ?: return
+        if (liveLoading || liveLoadingMore) return
+        liveLoadingMore = true
+        if (pageFailed == ChannelTab.Live) pageFailed = null
+        scope.launch {
+            runCatching { fetchPages(page, { YouTube.channelLive(d, it) }, liveVideos.mapTo(HashSet()) { it.id }) }
+                .onSuccess { (added, token) ->
+                    liveVideos = liveVideos + added
+                    liveNext = token
+                }
+                .onFailure { pageFailed = ChannelTab.Live }
+            liveLoadingMore = false
         }
     }
 
@@ -171,13 +225,14 @@ class ChannelState(val url: String, private val scope: CoroutineScope) {
         val page = shortsNext ?: return
         if (shortsLoading) return
         shortsLoading = true
+        if (pageFailed == ChannelTab.Shorts) pageFailed = null
         scope.launch {
-            runCatching { YouTube.channelShorts(d, page) }
-                .onSuccess { p ->
-                    val seen = shorts.mapTo(HashSet()) { it.id }
-                    shorts = shorts + p.videos.filter { seen.add(it.id) }
-                    shortsNext = p.next
+            runCatching { fetchPages(page, { YouTube.channelShorts(d, it) }, shorts.mapTo(HashSet()) { it.id }) }
+                .onSuccess { (added, token) ->
+                    shorts = shorts + added
+                    shortsNext = token
                 }
+                .onFailure { pageFailed = ChannelTab.Shorts }
             shortsLoading = false
         }
     }
@@ -200,16 +255,17 @@ class ChannelState(val url: String, private val scope: CoroutineScope) {
     fun loadMore() {
         val d = details ?: return
         val page = next ?: return
-        if (loading) return
-        loading = true
+        if (loading || loadingMore) return
+        loadingMore = true
+        if (pageFailed == ChannelTab.Videos) pageFailed = null
         scope.launch {
-            runCatching { YouTube.channelVideos(d, page) }
-                .onSuccess { p ->
-                    val seen = videos.mapTo(HashSet()) { it.id }
-                    videos = videos + p.videos.filter { seen.add(it.id) }
-                    next = p.next
+            runCatching { fetchPages(page, { YouTube.channelVideos(d, it) }, videos.mapTo(HashSet()) { it.id }) }
+                .onSuccess { (added, token) ->
+                    videos = videos + added
+                    next = token
                 }
-            loading = false
+                .onFailure { pageFailed = ChannelTab.Videos }
+            loadingMore = false
         }
     }
 
@@ -297,12 +353,30 @@ fun ChannelScreen(
     val nearEnd by remember {
         derivedStateOf { (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= list.layoutInfo.totalItemsCount - 4 }
     }
-    LaunchedEffect(nearEnd, state.activeTab, state.videos.size, state.shorts.size) {
-        if (!nearEnd) return@LaunchedEffect
+    // Keyed on the loading flags too: a request that was skipped (first page still loading) or
+    // that finished while the list is still at its end triggers the next page, so scrolling to
+    // the bottom keeps fetching older content until the channel has no more.
+    LaunchedEffect(
+        nearEnd, state.activeTab, state.videos.size, state.shorts.size, state.liveVideos.size,
+        state.loading, state.loadingMore, state.shortsLoading, state.liveLoadingMore, state.pageFailed,
+    ) {
+        if (!nearEnd || state.pageFailed == state.activeTab) return@LaunchedEffect
         when (state.activeTab) {
             ChannelTab.Videos -> if (state.videos.isNotEmpty()) state.loadMore()
             ChannelTab.Shorts -> if (state.shorts.isNotEmpty()) state.loadMoreShorts()
+            ChannelTab.Live -> if (state.liveVideos.isNotEmpty()) state.loadMoreLive()
             else -> {}
+        }
+    }
+    @Composable
+    fun PageFooter(busy: Boolean, more: Boolean, tab: ChannelTab, retry: () -> Unit) {
+        when {
+            state.pageFailed == tab && !busy -> Box(Modifier.fillMaxWidth().padding(20.dp), Alignment.Center) {
+                PillButton("Couldn't load more · Tap to retry", retry)
+            }
+            busy || more -> Box(Modifier.fillMaxWidth().padding(28.dp), Alignment.Center) {
+                CircularProgressIndicator(color = c.primary, strokeWidth = 4.dp, modifier = Modifier.size(32.dp))
+            }
         }
     }
     Box(Modifier.fillMaxSize().background(c.surface)) {
@@ -374,10 +448,8 @@ fun ChannelScreen(
                         items(state.videos, key = { it.id }) { video ->
                             VideoCard(video, onClick = { onOpen(video) }, modifier = Modifier.animateItem())
                         }
-                        if (state.loading || state.hasMore) item {
-                            Box(Modifier.fillMaxWidth().padding(28.dp), Alignment.Center) {
-                                CircularProgressIndicator(color = c.primary, strokeWidth = 4.dp, modifier = Modifier.size(32.dp))
-                            }
+                        item(key = "videos-footer") {
+                            PageFooter(state.loading || state.loadingMore, state.hasMore, ChannelTab.Videos, state::loadMore)
                         }
                     }
                     ChannelTab.Shorts -> {
@@ -399,10 +471,8 @@ fun ChannelScreen(
                             items(state.shorts.chunked(3), key = { row -> row.first().id }) { row ->
                                 ShortsRow(row, onOpenShort, Modifier.animateItem())
                             }
-                            if (state.shortsLoading) item {
-                                Box(Modifier.fillMaxWidth().padding(28.dp), Alignment.Center) {
-                                    CircularProgressIndicator(color = c.primary, strokeWidth = 4.dp, modifier = Modifier.size(32.dp))
-                                }
+                            item(key = "shorts-footer") {
+                                PageFooter(state.shortsLoading, state.hasMoreShorts, ChannelTab.Shorts, state::loadMoreShorts)
                             }
                         }
                     }
@@ -424,6 +494,9 @@ fun ChannelScreen(
                         } else {
                             items(state.liveVideos, key = { it.id }) { video ->
                                 VideoCard(video, onClick = { onOpen(video) }, modifier = Modifier.animateItem())
+                            }
+                            item(key = "live-footer") {
+                                PageFooter(state.liveLoadingMore, state.hasMoreLive, ChannelTab.Live, state::loadMoreLive)
                             }
                         }
                     }

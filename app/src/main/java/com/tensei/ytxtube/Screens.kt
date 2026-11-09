@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Subscriptions
 import androidx.compose.material.icons.rounded.TravelExplore
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -824,6 +825,9 @@ class SearchState(private val scope: CoroutineScope) {
         private set
     var generation by mutableStateOf(0)
         private set
+    /** Upload date / type filters for the results; applied by YouTube itself. */
+    var filters by mutableStateOf(SearchFilters())
+        private set
     private var job: Job? = null
     private var suggestJob: Job? = null
 
@@ -864,6 +868,29 @@ class SearchState(private val scope: CoroutineScope) {
         }
     }
 
+    /** New filters re-run the current search right away. */
+    fun applyFilters(new: SearchFilters) {
+        if (new == filters) return
+        filters = new
+        if (submitted.isNotEmpty()) run(submitted)
+    }
+
+    private fun run(q: String) {
+        loading = true
+        error = null
+        job?.cancel()
+        val f = filters
+        job = scope.launch {
+            runCatching {
+                // No filters: the existing search, unchanged. With filters: YouTube's filtered search.
+                if (f.isActive) InnerTube.search(f.query(q), f.params()).videos else YouTube.search(q)
+            }
+                .onSuccess { results = it; generation++ }
+                .onFailure { error = YouTube.friendlyError(it) }
+            loading = false
+        }
+    }
+
     fun submit() {
         val q = query.trim()
         if (q.isEmpty()) return
@@ -872,15 +899,7 @@ class SearchState(private val scope: CoroutineScope) {
         suggestions = emptyList()
         suggestionsLoading = false
         submitted = q
-        loading = true
-        error = null
-        job?.cancel()
-        job = scope.launch {
-            runCatching { YouTube.search(q) }
-                .onSuccess { results = it; generation++ }
-                .onFailure { error = YouTube.friendlyError(it) }
-            loading = false
-        }
+        run(q)
     }
 }
 
@@ -901,6 +920,18 @@ fun SearchScreen(
     val context = LocalContext.current
 
     LaunchedEffect(Unit) { SearchHistory.init(context) }
+    var showFilters by remember { mutableStateOf(false) }
+    if (showFilters) {
+        SearchFilterSheet(
+            current = state.filters,
+            onApply = { f ->
+                state.applyFilters(f)
+                // With a query typed but not searched yet, filtering also runs the search.
+                if (state.submitted.isEmpty() && state.query.isNotBlank()) state.submit()
+            },
+            onDismiss = { showFilters = false },
+        )
+    }
     fun showSearchKeyboard() {
         scope.launch {
             delay(80)
@@ -975,6 +1006,23 @@ fun SearchScreen(
                             contentAlignment = Alignment.Center,
                         ) { Icon(Icons.Rounded.Close, "Clear", tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
                     }
+                }
+                // Filters: upload date and type. Highlighted while any filter is active.
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(if (state.filters.isActive) c.primary else c.surfaceContainerHigh)
+                        .pressable { showFilters = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.Tune,
+                        if (state.filters.isActive) "Filters: ${state.filters.summary()}" else "Filters",
+                        tint = if (state.filters.isActive) c.onPrimary else c.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
             }
         },

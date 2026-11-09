@@ -1775,6 +1775,22 @@ object InnerTube {
     }
 
 
+    /**
+     * YouTube search with filters applied by YouTube ([params] from [SearchFilters]). Results
+     * include regular videos and Shorts (reel items), in YouTube's order.
+     */
+    suspend fun search(query: String, params: String?): FeedPage = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("query", query)
+        if (params != null) body.put("params", params)
+        val root = postAny("search", body)
+        val regular = parseFeed(root)
+        val shorts = parseShorts(root)
+        val merged = LinkedHashMap<String, VideoItem>()
+        regular.videos.forEach { merged.putIfAbsent(it.id, it) }
+        shorts.videos.forEach { merged.putIfAbsent(it.id, it) }
+        FeedPage(merged.values.toList(), regular.next ?: shorts.next)
+    }
+
     private const val CHANNEL_VIDEOS_TAB = "EgZ2aWRlb3PyBgQKAjoA"
     private const val CHANNEL_SHORTS_TAB = "EgZzaG9ydHPyBgUKA5oBAA%3D%3D"
     private const val CHANNEL_LIVE_TAB = "EgZzdHJlYW1z8gYECgJ6AA%3D%3D"
