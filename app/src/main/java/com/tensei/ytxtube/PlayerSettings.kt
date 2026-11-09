@@ -48,6 +48,17 @@ object BackgroundPlaybackSettings {
     }
 }
 
+/**
+ * "Play in background" from the video details screen: audio-only background playback for one
+ * video. Deliberately not persisted and never written to [BackgroundPlaybackSettings] or
+ * [AudioOnly]; it only applies while that video is the one playing. Read by the UI and by
+ * PlaybackService (same process).
+ */
+object BackgroundAudioOverride {
+    @Volatile
+    var videoId: String? = null
+}
+
 object PipSettings {
     private const val KEY_ENABLED = "app_pip_enabled"
     private var prefs: SharedPreferences? = null

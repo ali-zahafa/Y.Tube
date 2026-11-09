@@ -69,8 +69,10 @@ class DownloadTask(
     status: DownloadStatus = DownloadStatus.Queued,
     directory: String? = null,
     detail: String = "",
+    /** itag of the audio stream the user picked in the Audio only section; 0 = default (best M4A). */
+    val audioItag: Int = 0,
 ) {
-    val key: String get() = "$videoId@$height"
+    val key: String get() = if (audioItag > 0) "$videoId@a$audioItag" else "$videoId@$height"
 
     /** Folder this download is written to; null means the current download folder (older entries). */
     var directory by mutableStateOf(directory)
@@ -134,6 +136,27 @@ data class DownloadOption(
 
 
 
+
+/** One original audio stream offered in the Audio only section of the download dialog. */
+data class AudioDownloadOption(
+    val stream: AudioStream,
+    /** "m4a" or "webm": the stream's own container, saved as-is. */
+    val container: String,
+    val bitsPerSecond: Int,
+    val estimatedBytes: Long,
+    val sizeExact: Boolean,
+    /** The highest-quality original stream. */
+    val best: Boolean,
+) {
+    val itag: Int get() = stream.itag
+    val kbps: Int get() = DownloadFormats.kbps(bitsPerSecond)
+    val codecLabel: String get() = DownloadFormats.audioCodecLabel(stream.codec)
+        ?: if (container == "webm") "Opus" else "AAC"
+
+    /** e.g. "M4A · AAC · 129 kbps". */
+    val formatDetail: String
+        get() = DownloadFormats.describe(container, audioOnly = true, videoCodec = null, audioCodec = stream.codec ?: codecLabel, audioKbps = kbps)
+}
 
 object Downloads {
     private const val MAX_ACTIVE = 2
@@ -218,6 +241,46 @@ object Downloads {
         val info = StreamCache.getOrLoad(id)
         HdrFormats.install(id, info)
         optionsFor(info)
+    }
+
+    /** The original audio streams of this video that can be saved without conversion, best first. */
+    suspend fun audioOptions(id: String): List<AudioDownloadOption> = withContext(Dispatchers.IO) {
+        audioOptionsFor(StreamCache.getOrLoad(id))
+    }
+
+    private fun audioContainer(stream: AudioStream): String? = when {
+        stream.format == StreamFormat.M4A -> "m4a"
+        stream.format == StreamFormat.WEBMA_OPUS -> "webm"
+        stream.format == StreamFormat.WEBMA && stream.codec.orEmpty().startsWith("opus") -> "webm"
+        else -> null
+    }
+
+    private fun audioOptionsFor(info: StreamInfo): List<AudioDownloadOption> {
+        val streams = info.audioStreams.filter {
+            it.isUrl && it.deliveryMethod == org.schabi.newpipe.extractor.stream.DeliveryMethod.PROGRESSIVE_HTTP &&
+                audioContainer(it) != null
+        }
+        val chosen = DownloadFormats.audioChoices(streams) { s ->
+            DownloadFormats.AudioCandidate(
+                itag = s.itag,
+                container = audioContainer(s) ?: "",
+                bitsPerSecond = DownloadFormats.audioBitsPerSecond(s.bitrate, s.averageBitrate),
+                original = s.audioTrackType == null ||
+                    s.audioTrackType == org.schabi.newpipe.extractor.stream.AudioTrackType.ORIGINAL,
+            )
+        }
+        return chosen.mapIndexed { index, s ->
+            val bps = DownloadFormats.audioBitsPerSecond(s.bitrate, s.averageBitrate)
+            val exact = s.itagItem?.contentLength?.takeIf { it > 0 }
+            AudioDownloadOption(
+                stream = s,
+                container = audioContainer(s) ?: DownloadFormats.AUDIO_EXTENSION,
+                bitsPerSecond = bps,
+                estimatedBytes = exact ?: DownloadFormats.estimateBytes(bps, info.duration),
+                sizeExact = exact != null,
+                best = index == 0,
+            )
+        }
     }
 
     private fun optionsFor(info: StreamInfo): List<DownloadOption> {
@@ -341,6 +404,34 @@ object Downloads {
             container = DownloadFormats.AUDIO_EXTENSION,
             status = DownloadStatus.Queued,
             directory = dir.absolutePath,
+        )
+        tasks.add(0, task)
+        persist()
+        pump()
+        return true
+    }
+
+    /** Downloads exactly the audio stream picked in the dialog, in its own container. */
+    fun enqueueAudio(video: VideoItem, option: AudioDownloadOption): Boolean {
+        if (!initialized) return false
+        val key = "${video.id}@a${option.itag}"
+        if (tasks.any { it.key == key }) return false
+        val name = DownloadFormats.fileName(video.title, video.id, 0, option.container, audioKbps = option.kbps)
+        if (tasks.any { it.fileName == name }) return false
+        val task = DownloadTask(
+            videoId = video.id,
+            title = video.title,
+            channel = video.channel,
+            thumbnail = video.thumbnail,
+            durationSec = video.durationSec,
+            height = 0,
+            fileName = name,
+            container = option.container,
+            total = option.estimatedBytes,
+            status = DownloadStatus.Queued,
+            directory = dir.absolutePath,
+            detail = option.formatDetail,
+            audioItag = option.itag,
         )
         tasks.add(0, task)
         persist()
@@ -509,13 +600,19 @@ object Downloads {
         val ctx = currentCoroutineContext()
 
         if (task.height == 0) {
-            val audio = bestAudio(info, webm = false) ?: throw IOException("No M4A audio stream is offered for this video")
+            val audio = if (task.audioItag > 0) {
+                // The exact stream picked in the dialog (fresh URL, same itag).
+                audioOptionsFor(info).firstOrNull { it.itag == task.audioItag }?.stream
+                    ?: throw IOException("That audio quality is no longer available")
+            } else {
+                bestAudio(info, webm = false) ?: throw IOException("No M4A audio stream is offered for this video")
+            }
             task.detail = DownloadFormats.describe(
-                container = DownloadFormats.AUDIO_EXTENSION,
+                container = if (task.audioItag > 0) task.container else DownloadFormats.AUDIO_EXTENSION,
                 audioOnly = true,
                 videoCodec = null,
                 audioCodec = audio.codec,
-                audioKbps = DownloadFormats.kbps(max(audio.averageBitrate, audio.bitrate)),
+                audioKbps = DownloadFormats.kbps(DownloadFormats.audioBitsPerSecond(audio.bitrate, audio.averageBitrate)),
             )
             val work = workFile(task, "audio")
             val remote = probe(audio.content)
@@ -941,8 +1038,10 @@ object Downloads {
 
 
 
-    private fun workFile(task: DownloadTask, kind: String): File =
-        File(task.directory?.let(::File) ?: dir, "${task.videoId}_${task.height}_$kind.part")
+    private fun workFile(task: DownloadTask, kind: String): File {
+        val variant = if (task.audioItag > 0) "a${task.audioItag}" else task.height.toString()
+        return File(task.directory?.let(::File) ?: dir, "${task.videoId}_${variant}_$kind.part")
+    }
 
     /** Sidecar recording which stream a partial file belongs to, so resuming never mixes streams. */
     private fun metaFile(work: File): File = File(work.parentFile, work.name + ".meta")
@@ -974,7 +1073,8 @@ object Downloads {
                         .put("total", task.total)
                         .put("status", task.status.name)
                         .put("dir", task.directory)
-                        .put("detail", task.detail),
+                        .put("detail", task.detail)
+                        .put("aitag", task.audioItag),
                 )
             }
             prefs.edit().putString(PERSIST_KEY, array.toString()).apply()
@@ -1015,6 +1115,7 @@ object Downloads {
                     },
                     directory = json.optString("dir").takeIf { it.isNotBlank() && it != "null" },
                     detail = json.optString("detail").takeIf { it != "null" }.orEmpty(),
+                    audioItag = json.optInt("aitag", 0),
                 )
                 if (status == DownloadStatus.Complete && !task.file.exists()) continue
                 if (tasks.any { it.fileName == name }) continue
@@ -1031,10 +1132,10 @@ object Downloads {
                 val name = f.name
                 if (name.endsWith(".part") || name.endsWith(".meta") || name.startsWith(".")) return@forEach
                 if (!existing.add(name)) return@forEach
-                val audio = name.endsWith(".m4a")
+                val audio = name.endsWith(".m4a") || name.contains(" [Audio")
                 val ext = when {
-                    audio -> ".m4a"
                     name.endsWith(".webm") -> ".webm"
+                    audio -> ".m4a"
                     else -> ".mp4"
                 }
                 if (!name.endsWith(ext)) return@forEach

@@ -80,6 +80,7 @@ import androidx.compose.material.icons.outlined.WatchLater
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -523,7 +524,7 @@ private fun VideoStage(state: PlayerState, morph: PlayerMorph, onCollapse: () ->
             state = rememberDraggableState { delta ->
                 if (!decided) {
                     decided = true
-                    pulling = delta < 0f && state.expanded && !state.fullscreen && !AudioOnly.enabled && morph.progress.value >= 0.999f
+                    pulling = delta < 0f && state.expanded && !state.fullscreen && !state.audioOnlyActive && morph.progress.value >= 0.999f
                 }
                 if (pulling) scope.launch(start = CoroutineStart.UNDISPATCHED) { pullUp.snapTo((pullUp.value - delta).coerceAtLeast(0f)) }
                 else morph.dragBy(delta)
@@ -543,7 +544,7 @@ private fun VideoStage(state: PlayerState, morph: PlayerMorph, onCollapse: () ->
         )
 
     val controlsAlpha = { ramp(morph.progress.value, 0.7f) }
-    if (AudioOnly.enabled) {
+    if (state.audioOnlyActive) {
         AudioOnlyStage(
             state = state,
             interactive = interactive,
@@ -644,6 +645,17 @@ private fun PlayerActions(state: PlayerState) {
                 } else {
                     state.downloadFor = item
                 }
+            }
+            ActionPill(
+                icon = Icons.Rounded.Headphones,
+                label = if (state.backgroundAudioActive) I18n.t("playing_in_background", "In background")
+                else I18n.t("play_in_background", "Play in background"),
+                active = state.backgroundAudioActive,
+                flourish = Flourish.Pop,
+                shape = RoundedCornerShape(18.dp),
+                description = if (state.backgroundAudioActive) "Back to video" else "Play in background (audio only)",
+            ) {
+                state.toggleBackgroundAudio()
             }
             ActionPill(
                 icon = Icons.Rounded.Share,
@@ -843,7 +855,7 @@ fun LiquidMiniPlayer(
                 ) {
                     if (showVideo) {
                         Thumbnail(item.thumbnail, Modifier.fillMaxSize(), radius = 0)
-                        if (!AudioOnly.enabled) {
+                        if (!state.audioOnlyActive) {
                             Box(Modifier.fillMaxSize().aspectFit(state.stageAspect, cover = true)) {
                                 LocalVideoSurface.current(Modifier.fillMaxSize().aspectFit(state.videoAspect))
                             }
@@ -899,7 +911,7 @@ fun MiniPlayer(
             .clip(shape)
             .background(Color.Black),
     ) {
-        if (showVideo && !AudioOnly.enabled) {
+        if (showVideo && !state.audioOnlyActive) {
             Thumbnail(item.thumbnail, Modifier.fillMaxSize(), radius = 0)
             Box(Modifier.fillMaxSize().aspectFit(state.stageAspect, cover = true)) {
                 LocalVideoSurface.current(Modifier.fillMaxSize().aspectFit(state.videoAspect))

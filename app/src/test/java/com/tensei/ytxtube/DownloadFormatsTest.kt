@@ -12,7 +12,56 @@ class DownloadFormatsTest {
         val name = DownloadFormats.fileName("Some Song", "dQw4w9WgXcQ", height = 0)
         assertEquals("Some Song [Audio] dQw4w9WgXcQ.m4a", name)
         assertFalse(name.endsWith(".mp3"))
-        assertEquals("m4a", DownloadFormats.extensionFor("webm", audioOnly = true))
+        assertEquals("m4a", DownloadFormats.extensionFor("m4a", audioOnly = true))
+        assertEquals("m4a", DownloadFormats.extensionFor("mp4", audioOnly = true))
+    }
+
+    @Test
+    fun opusAudio_keepsItsWebmContainer_andQualityIsInTheName() {
+        assertEquals("webm", DownloadFormats.extensionFor("webm", audioOnly = true))
+        assertEquals("Song [Audio 160k] abcdefghijk.webm", DownloadFormats.fileName("Song", "abcdefghijk", 0, "webm", audioKbps = 160))
+        assertEquals("Song [Audio 129k] abcdefghijk.m4a", DownloadFormats.fileName("Song", "abcdefghijk", 0, "m4a", audioKbps = 129))
+        assertEquals("WebM · Opus · 160 kbps", DownloadFormats.describe("webm", true, null, "opus", 160))
+        // Two qualities of one video never share a file name.
+        assertFalse(
+            DownloadFormats.fileName("Song", "abcdefghijk", 0, "m4a", audioKbps = 129) ==
+                DownloadFormats.fileName("Song", "abcdefghijk", 0, "m4a", audioKbps = 49),
+        )
+    }
+
+    @Test
+    fun audioBitrateAndSize() {
+        assertEquals(129_480, DownloadFormats.audioBitsPerSecond(129_480, 128))
+        assertEquals(128_000, DownloadFormats.audioBitsPerSecond(-1, 128))
+        assertEquals(0, DownloadFormats.audioBitsPerSecond(-1, -1))
+        assertEquals(3_840_000L, DownloadFormats.estimateBytes(128_000, 240))
+        assertEquals(-1L, DownloadFormats.estimateBytes(0, 240))
+        assertEquals(-1L, DownloadFormats.estimateBytes(128_000, 0))
+    }
+
+    private fun c(itag: Int, container: String, bps: Int, original: Boolean) =
+        DownloadFormats.AudioCandidate(itag, container, bps, original)
+
+    @Test
+    fun audioChoices_originalTrackOnly_bestFirst_eachItagOnce() {
+        val streams = listOf(
+            c(140, "m4a", 129_000, true),
+            c(251, "webm", 135_000, true),
+            c(249, "webm", 50_000, true),
+            c(140, "m4a", 129_000, true), // same itag listed twice
+            c(251, "webm", 140_000, false), // dubbed track
+            c(600, "ogg", 300_000, true), // container that would need conversion
+        )
+        val chosen = DownloadFormats.audioChoices(streams) { it }
+        assertEquals(listOf(251, 140, 249), chosen.map { it.itag })
+        assertTrue(chosen.all { it.original })
+    }
+
+    @Test
+    fun audioChoices_noOriginalMarked_keepsAll_andTiesPreferM4a() {
+        val chosen = DownloadFormats.audioChoices(listOf(c(251, "webm", 128_000, false), c(140, "m4a", 128_000, false))) { it }
+        assertEquals(listOf(140, 251), chosen.map { it.itag })
+        assertTrue(DownloadFormats.audioChoices(emptyList<DownloadFormats.AudioCandidate>()) { it }.isEmpty())
     }
 
     @Test

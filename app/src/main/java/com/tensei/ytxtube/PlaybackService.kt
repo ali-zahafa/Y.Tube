@@ -156,7 +156,11 @@ class PlaybackService : MediaSessionService() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = session?.player
         val keep = player != null && BackgroundPlaybackPolicy.keepServiceOnTaskRemoved(
-            backgroundEnabled = BackgroundPlaybackSettings.enabled,
+            backgroundEnabled = BackgroundPlaybackPolicy.effectiveEnabled(
+                BackgroundPlaybackSettings.enabled,
+                BackgroundAudioOverride.videoId,
+                player.currentMediaItem?.mediaId,
+            ),
             playWhenReady = player.playWhenReady,
             hasMedia = player.mediaItemCount > 0,
             ended = player.playbackState == Player.STATE_ENDED,

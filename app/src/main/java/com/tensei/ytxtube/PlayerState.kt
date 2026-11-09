@@ -161,7 +161,19 @@ class PlayerState(private val scope: CoroutineScope) {
 
 
 
-    val stageAspect: Float get() = if (AudioOnly.enabled) AudioStageAspect else {
+    /**
+     * Video id for which "Play in background" is on (audio only, keeps playing when the app is
+     * left). Session-only: never saved, and dropped when another video is opened.
+     */
+    var backgroundAudioFor by mutableStateOf<String?>(null)
+        private set
+
+    val backgroundAudioActive: Boolean get() = backgroundAudioFor != null && backgroundAudioFor == current?.id
+
+    /** Audio-only presentation: the saved Audio only mode or "Play in background" for this video. */
+    val audioOnlyActive: Boolean get() = AudioOnly.enabled || backgroundAudioActive
+
+    val stageAspect: Float get() = if (audioOnlyActive) AudioStageAspect else {
         min(videoAspect.coerceIn(StageMinAspect, StageMaxAspect), StageFrameAspect)
     }
     var firstFrameRendered by mutableStateOf(false)
@@ -285,6 +297,8 @@ class PlayerState(private val scope: CoroutineScope) {
         endHoldSpeed()
         openedAt = android.os.SystemClock.elapsedRealtime()
         Log.i("YTXTubeTime", "open ${item.id}")
+        // "Play in background" belongs to one video only.
+        if (backgroundAudioFor != null && backgroundAudioFor != item.id) clearBackgroundAudio()
         if (startPlayback) Net.prewarmMediaConnection()
         current = item
         if (isMusicMode) RecentMusic.record(item)
@@ -892,6 +906,33 @@ class PlayerState(private val scope: CoroutineScope) {
     fun toggleRememberSpeed() = PlaybackSpeed.setRemember(!PlaybackSpeed.remember, speed)
 
 
+    /**
+     * "Play in background" button: turns audio-only background playback on for the current video
+     * (video decoding stops, playback continues when the app is left or the screen locks), or
+     * back to normal video. Uses the existing session and track switching; saved settings are
+     * not touched and the app is not minimized.
+     */
+    fun toggleBackgroundAudio() {
+        val id = current?.id ?: return
+        if (backgroundAudioActive) {
+            clearBackgroundAudio()
+            actionMessage = "Back to video"
+        } else {
+            backgroundAudioFor = id
+            BackgroundAudioOverride.videoId = id
+            applyVideoTrack()
+            controller?.let { if (!it.playWhenReady) it.play() }
+            actionMessage = "Playing in background: audio continues when you leave the app"
+        }
+    }
+
+    private fun clearBackgroundAudio() {
+        if (backgroundAudioFor == null && BackgroundAudioOverride.videoId == null) return
+        backgroundAudioFor = null
+        BackgroundAudioOverride.videoId = null
+        applyVideoTrack()
+    }
+
     fun setAudioOnly(on: Boolean) {
         AudioOnly.set(on)
         applyVideoTrack()
@@ -908,7 +949,11 @@ class PlayerState(private val scope: CoroutineScope) {
     ) {
         if (background) {
             val action = BackgroundPlaybackPolicy.onBackground(
-                backgroundEnabled = BackgroundPlaybackSettings.enabled,
+                backgroundEnabled = BackgroundPlaybackPolicy.effectiveEnabled(
+                    BackgroundPlaybackSettings.enabled,
+                    BackgroundAudioOverride.videoId,
+                    controller?.currentMediaItem?.mediaId,
+                ),
                 changingConfigurations = changingConfigurations,
                 hasMedia = (controller?.mediaItemCount ?: 0) > 0,
             )
@@ -944,7 +989,7 @@ class PlayerState(private val scope: CoroutineScope) {
             // made the decoder re-init, which is the audible dip heard when reopening the
             // app during background playback.
             if (isMusicMode) return
-            val off = AudioOnly.enabled || wantBackground
+            val off = AudioOnly.enabled || backgroundAudioActive || wantBackground
             val player = controller ?: return
             if (player.trackSelectionParameters.disabledTrackTypes.contains(androidx.media3.common.C.TRACK_TYPE_VIDEO) == off) return
             Log.i(TAG, if (off) "video off (${if (AudioOnly.enabled) "audio only" else "background"})" else "video on")
@@ -955,6 +1000,7 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun close() {
+        clearBackgroundAudio()
         loadJob?.cancel()
         controller?.run { stop(); clearMediaItems() }
         queue = emptyList()

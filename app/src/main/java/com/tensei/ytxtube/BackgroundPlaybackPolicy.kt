@@ -42,6 +42,13 @@ object BackgroundPlaybackPolicy {
     }
 
     /**
+     * Background playback is on when the saved setting is on, or when "Play in background"
+     * was turned on for the video that is currently playing.
+     */
+    fun effectiveEnabled(savedEnabled: Boolean, overrideVideoId: String?, currentVideoId: String?): Boolean =
+        savedEnabled || (overrideVideoId != null && overrideVideoId == currentVideoId)
+
+    /**
      * Called when the user swipes the app away from Recents.
      *
      * @return true when the playback service should keep running (and keep its notification),

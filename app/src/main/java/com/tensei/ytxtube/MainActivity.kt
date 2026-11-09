@@ -389,7 +389,7 @@ fun YtxTubeApp() {
     val orientation = rememberOrientationController(activity)
     val playerOpen = player.current != null && player.expanded
 
-    orientation.Bind(playerOpen && !AudioOnly.enabled && !player.isMusicMode)
+    orientation.Bind(playerOpen && !player.audioOnlyActive && !player.isMusicMode)
     val pip = remember(activity) { PipController(activity as ComponentActivity) }
 
     SideEffect {

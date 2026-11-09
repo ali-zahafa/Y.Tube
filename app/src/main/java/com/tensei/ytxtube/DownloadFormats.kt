@@ -14,10 +14,13 @@ object DownloadFormats {
 
     const val AUDIO_EXTENSION = "m4a"
 
-    /** File extension that matches the container actually written. */
+    /**
+     * File extension that matches the container actually written: audio-only AAC is `.m4a`,
+     * audio-only Opus stays in its original WebM container (`.webm`), video is `.mp4`/`.webm`.
+     */
     fun extensionFor(container: String, audioOnly: Boolean): String = when {
-        audioOnly -> AUDIO_EXTENSION
         container.equals("webm", ignoreCase = true) -> "webm"
+        audioOnly -> AUDIO_EXTENSION
         else -> "mp4"
     }
 
@@ -87,7 +90,14 @@ object DownloadFormats {
     private val UNSAFE = Regex("[\\\\/:*?\"<>|\\n\\r\\t]")
     private val SPACES = Regex("\\s+")
 
-    fun fileName(title: String, videoId: String, height: Int, container: String = "mp4", hdr: Boolean = false): String {
+    fun fileName(
+        title: String,
+        videoId: String,
+        height: Int,
+        container: String = "mp4",
+        hdr: Boolean = false,
+        audioKbps: Int = 0,
+    ): String {
         val safe = title
             .replace(UNSAFE, " ")
             .replace(SPACES, " ")
@@ -97,7 +107,9 @@ object DownloadFormats {
             .ifBlank { videoId }
         val audioOnly = height == 0
         val ext = extensionFor(container, audioOnly)
-        if (audioOnly) return "$safe [Audio] $videoId.$ext"
+        // A chosen audio quality carries its bitrate in the name so two qualities of the same
+        // video never overwrite each other; the default music download keeps "[Audio]".
+        if (audioOnly) return "$safe [Audio${if (audioKbps > 0) " ${audioKbps}k" else ""}] $videoId.$ext"
         val hdrTag = if (hdr) " HDR" else ""
         return "$safe [${height}p$hdrTag] $videoId.$ext"
     }
@@ -119,6 +131,46 @@ object DownloadFormats {
         partialBytes <= total &&
         savedIdentity != null &&
         savedIdentity == currentIdentity
+
+    /** One downloadable audio stream, described only by what YouTube reports for it. */
+    data class AudioCandidate(
+        val itag: Int,
+        /** "m4a" (AAC in MP4) or "webm" (Opus in WebM); anything else is not offered. */
+        val container: String,
+        val bitsPerSecond: Int,
+        /** The creator's original track (not a dubbed or descriptive one). */
+        val original: Boolean,
+    )
+
+    /** Real bitrate in bits/s: the measured one, else the itag's nominal kbps, else 0 (unknown). */
+    fun audioBitsPerSecond(bitrateBps: Int, averageKbps: Int): Int = when {
+        bitrateBps > 0 -> bitrateBps
+        averageKbps > 0 -> averageKbps * 1000
+        else -> 0
+    }
+
+    /** bitrate × duration, or -1 when either is unknown. */
+    fun estimateBytes(bitsPerSecond: Int, durationSec: Long): Long =
+        if (bitsPerSecond > 0 && durationSec > 0) bitsPerSecond.toLong() * durationSec / 8 else -1L
+
+    /**
+     * The audio streams to offer, best first. Only the original language track is listed when
+     * it is known (dubbed tracks would otherwise appear as extra "qualities"), each itag once,
+     * and only containers that can be saved without conversion (M4A, WebM). The first entry
+     * is the original-quality choice.
+     */
+    fun <T> audioChoices(items: List<T>, describe: (T) -> AudioCandidate): List<T> {
+        val described = items.map { it to describe(it) }
+            .filter { (_, c) -> c.container == "m4a" || c.container == "webm" }
+        val pool = described.filter { (_, c) -> c.original }.ifEmpty { described }
+        return pool
+            .distinctBy { (_, c) -> c.itag }
+            .sortedWith(
+                compareByDescending<Pair<T, AudioCandidate>> { (_, c) -> c.bitsPerSecond }
+                    .thenBy { (_, c) -> if (c.container == "m4a") 0 else 1 },
+            )
+            .map { it.first }
+    }
 
     /** Identity of one remote stream, used to decide whether a partial file still matches it. */
     fun streamIdentity(itag: Int, total: Long): String = "itag=$itag;len=$total"
