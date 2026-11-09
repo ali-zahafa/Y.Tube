@@ -21,7 +21,7 @@
 
 ## English
 
-Y.tube is a lightweight Android client for YouTube and YouTube Music, built with Kotlin, Jetpack Compose and AndroidX Media3 (ExoPlayer). It is a community fork of [YTXTube](https://github.com/Koustubh12345/YTXTube) with a reworked playback, background-audio and download engine.
+Y.tube is a lightweight Android client for YouTube and YouTube Music, built with Kotlin, Jetpack Compose and AndroidX Media3 (ExoPlayer). It is a community fork of the open-source YTXTube project with a reworked playback, background-audio and download engine.
 
 ### Features
 
@@ -64,7 +64,7 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Requires JDK 
 
 ## العربية
 
-Y.tube تطبيق أندرويد خفيف لمشاهدة يوتيوب ويوتيوب ميوزك، مبني بـ Kotlin و Jetpack Compose ومشغّل AndroidX Media3 (ExoPlayer). المشروع نسخة مطوّرة من [YTXTube](https://github.com/Koustubh12345/YTXTube)، اتعاد فيها بناء محرك التشغيل والتشغيل في الخلفية والتحميل.
+Y.tube تطبيق أندرويد خفيف لمشاهدة يوتيوب ويوتيوب ميوزك، مبني بـ Kotlin و Jetpack Compose ومشغّل AndroidX Media3 (ExoPlayer). المشروع نسخة مطوّرة من مشروع YTXTube مفتوح المصدر، اتعاد فيها بناء محرك التشغيل والتشغيل في الخلفية والتحميل.
 
 ### المميزات
 
@@ -119,7 +119,7 @@ Y.tube مشروع مستقل مفتوح المصدر، و**مالوش أي عل�
 
 ## Credits / الشكر
 
-- Based on [YTXTube](https://github.com/Koustubh12345/YTXTube) by Koustubh12345 (GPL-3.0), which also offers a [web app](https://koustubh12345.github.io/YTXTube/) and a [Telegram community](https://t.me/YTXTubeDiscussion).
+- Based on the open-source YTXTube project by Koustubh12345 (GPL-3.0). / مبني على مشروع YTXTube مفتوح المصدر (ترخيص GPL-3.0).
 - Some ideas and techniques adapted from [FlashTube](https://github.com/JustaThinker/FlashTube).
 - Stream extraction by [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor); playback by [AndroidX Media3](https://github.com/androidx/media).
 

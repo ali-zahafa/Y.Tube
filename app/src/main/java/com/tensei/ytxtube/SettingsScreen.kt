@@ -277,25 +277,12 @@ fun SettingsScreen(
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         }
                     }
-                    val ytxRepo = "https://github.com/Koustubh12345/YTXTube"
+                    val ytxRepo = "https://github.com/ali-zahafa/YTXTube"
                     SettingsRow(
                         icon = Icons.Rounded.Code,
                         title = I18n.t("open_source", "Open Source"),
                         subtitle = I18n.t("open_source_sub", "View source code on GitHub"),
                         onClick = { openRepo(ytxRepo) },
-                    )
-                    val telegram = "https://t.me/getthefckoutofheree"
-                    val openTelegram: () -> Unit = {
-                        val app = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=getthefckoutofheree"))
-                        val web = Intent(Intent.ACTION_VIEW, Uri.parse(telegram))
-                        runCatching { context.startActivity(app) }
-                            .onFailure { runCatching { context.startActivity(web) } }
-                    }
-                    SettingsRow(
-                        icon = Icons.Rounded.Person,
-                        title = I18n.t("developer", "Developer"),
-                        subtitle = "@getthefckoutofheree",
-                        onClick = openTelegram,
                     )
                 }
             }

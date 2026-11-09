@@ -831,7 +831,7 @@ object InnerTube {
             val url = "https://lrclib.net/api/get?track_name=$encT&artist_name=$encA"
             val req = Request.Builder()
                 .url(url)
-                .header("User-Agent", "YTXTube/1.1 (https://github.com/Koustubh12345/YTXTube)")
+                .header("User-Agent", "Y.tube/1.1 (https://github.com/ali-zahafa/YTXTube)")
                 .build()
             Net.client.newCall(req).execute().use { r ->
                 if (r.isSuccessful) {
@@ -899,7 +899,7 @@ object InnerTube {
                 java.net.URLEncoder.encode("$cleanTitle $cleanArtist", "UTF-8")
             val searchReq = Request.Builder()
                 .url(searchUrl)
-                .header("User-Agent", "YTXTube/1.1 (https://github.com/Koustubh12345/YTXTube)")
+                .header("User-Agent", "Y.tube/1.1 (https://github.com/ali-zahafa/YTXTube)")
                 .build()
             Net.client.newCall(searchReq).execute().use { r ->
                 if (!r.isSuccessful) return@runCatching
