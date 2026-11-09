@@ -172,6 +172,18 @@ object DownloadFormats {
             .map { it.first }
     }
 
+    /** Bytes per request: YouTube serves requests up to about 10 MB at full speed. */
+    const val CHUNK_BYTES = 10L * 1024 * 1024
+
+    /**
+     * Last byte (inclusive) of the next request when downloading in chunks from [downloaded],
+     * or null when nothing is left or the total size is unknown.
+     */
+    fun chunkEnd(downloaded: Long, total: Long, chunkBytes: Long): Long? {
+        if (total <= 0L || downloaded >= total || chunkBytes <= 0L || downloaded < 0L) return null
+        return minOf(downloaded + chunkBytes, total) - 1
+    }
+
     /** Identity of one remote stream, used to decide whether a partial file still matches it. */
     fun streamIdentity(itag: Int, total: Long): String = "itag=$itag;len=$total"
 

@@ -878,6 +878,10 @@ object Downloads {
         val maxAttempts = 5
         val buffer = ByteArray(128 * 1024)
         val ctx = currentCoroutineContext()
+        // YouTube throttles one long request to roughly playback speed (a 38 MB audio file took
+        // as long as the audio itself), but serves each request of up to ~10 MB at full speed.
+        // So the file is fetched as consecutive byte ranges, like NewPipe and yt-dlp do.
+        var chunked = remote.ranges && remote.total > 0
 
         while (remote.total <= 0 || downloaded < remote.total) {
             try {
@@ -886,9 +890,13 @@ object Downloads {
                     .header("User-Agent", Net.USER_AGENT)
                     .header("Referer", "https://www.youtube.com/")
 
-                if (downloaded > 0) {
+                val chunkEnd = if (chunked) DownloadFormats.chunkEnd(downloaded, remote.total, DownloadFormats.CHUNK_BYTES) else null
+                if (chunkEnd != null) {
+                    reqBuilder.header("Range", "bytes=$downloaded-$chunkEnd")
+                } else if (downloaded > 0) {
                     reqBuilder.header("Range", "bytes=$downloaded-")
                 }
+                val before = downloaded
 
                 Net.client.newCall(reqBuilder.build()).execute().use { response ->
                     if (response.code != 200 && response.code != 206) {
@@ -896,6 +904,18 @@ object Downloads {
                     }
                     val body = response.body ?: throw IOException("Empty response body")
                     val isPartial = response.code == 206
+                    if (isPartial) {
+                        // The server must answer with the range that was asked for.
+                        val start = response.header("Content-Range")
+                            ?.substringAfter("bytes ", "")?.substringBefore('-')?.trim()?.toLongOrNull()
+                        if (start != null && start != downloaded) {
+                            throw IOException("Server sent bytes from $start instead of $downloaded")
+                        }
+                    } else if (chunked) {
+                        // Range ignored: take the whole file in this one response instead.
+                        Log.i(TAG, "server ignored the range request; downloading in one piece")
+                        chunked = false
+                    }
                     val source = body.source()
 
                     RandomAccessFile(file, "rw").use { raf ->
@@ -924,6 +944,7 @@ object Downloads {
                 if (remote.total <= 0 || downloaded >= remote.total) {
                     break
                 }
+                if (downloaded == before) throw IOException("The server sent no data")
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {

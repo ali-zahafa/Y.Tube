@@ -123,6 +123,26 @@ class DownloadFormatsTest {
     }
 
     @Test
+    fun chunks_coverTheWholeFileWithoutGapsOrOverlap() {
+        val total = 38L * 1024 * 1024 + 123
+        var pos = 0L
+        var requests = 0
+        while (true) {
+            val end = DownloadFormats.chunkEnd(pos, total, DownloadFormats.CHUNK_BYTES) ?: break
+            assertTrue(end >= pos && end - pos + 1 <= DownloadFormats.CHUNK_BYTES)
+            pos = end + 1
+            requests++
+        }
+        assertEquals(total, pos)
+        assertEquals(4, requests)
+        // Resuming mid-file, finished, or unknown size.
+        assertEquals(1_000L + DownloadFormats.CHUNK_BYTES - 1, DownloadFormats.chunkEnd(1_000, total, DownloadFormats.CHUNK_BYTES))
+        assertEquals(null, DownloadFormats.chunkEnd(total, total, DownloadFormats.CHUNK_BYTES))
+        assertEquals(null, DownloadFormats.chunkEnd(0, -1, DownloadFormats.CHUNK_BYTES))
+        assertEquals(99L, DownloadFormats.chunkEnd(0, 100, DownloadFormats.CHUNK_BYTES))
+    }
+
+    @Test
     fun transferComplete_requiresExactSize() {
         assertTrue(DownloadFormats.isTransferComplete(100, 100, 100))
         assertFalse(DownloadFormats.isTransferComplete(99, 100, 100))
