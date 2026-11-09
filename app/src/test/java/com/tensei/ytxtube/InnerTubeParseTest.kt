@@ -108,6 +108,11 @@ class InnerTubeParseTest {
         assertEquals(1_100L, InnerTube.parseViews("1.1K videos"))
         assertEquals(0L, InnerTube.parseViews("No views"))
         assertEquals(-1L, InnerTube.parseViews(null))
+        // Indian units still parse, and English words containing "cr" no longer do.
+        assertEquals(12_000_000L, InnerTube.parseViews("1.2 crore views"))
+        assertEquals(15_000_000L, InnerTube.parseViews("1.5Cr views"))
+        assertEquals(21_000L, InnerTube.parseViews("21K subscribers"))
+        assertEquals(350L, InnerTube.parseViews("350 scrobbles"))
     }
 
     @Test fun channelHeaderFromVideosTab() {

@@ -2171,7 +2171,9 @@ object InnerTube {
     internal fun parseViews(text: String?): Long {
         val t = text?.lowercase()?.replace(",", "")?.trim() ?: return -1
         if (t.startsWith("no ") || t.startsWith("कोई ") || t.startsWith("sin ")) return 0
-        if ("करोड़" in t || "cr" in t) {
+        // "cr"/"crore" only as a unit of its own: a bare `"cr" in t` also matched English
+        // "subscribers", turning "4.85M subscribers" into 48,500,000.
+        if ("करोड़" in t || CRORE_UNIT.containsMatchIn(t)) {
             val num = Regex("([\\d.]+)").find(t)?.groupValues?.get(1)?.toDoubleOrNull() ?: return -1
             return (num * 10_000_000).toLong()
         }
@@ -2258,6 +2260,8 @@ object InnerTube {
         style == "BADGE_STYLE_TYPE_VERIFIED" || style == "BADGE_STYLE_TYPE_VERIFIED_ARTIST"
 
     private val VERIFIED_CHANNEL_LABEL = Regex("verified|official artist", RegexOption.IGNORE_CASE)
+
+    private val CRORE_UNIT = Regex("(?<![a-z])cr(ore)?(?![a-z])")
     private val VIDEO_COUNT_IN_LINE = Regex("""[\d,.]+[kmb]?\s+videos\b""", RegexOption.IGNORE_CASE)
 }
 
