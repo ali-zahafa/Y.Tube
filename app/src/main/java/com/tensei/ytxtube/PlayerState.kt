@@ -311,6 +311,7 @@ class PlayerState(private val scope: CoroutineScope) {
         decodedHeight = null
         playingFormat = null
         playingAudioFormat = null
+        clearLiveQuality()
         loading = true
         sheet = null
         comments.clearFor(item.id)
@@ -411,7 +412,9 @@ class PlayerState(private val scope: CoroutineScope) {
     private fun startPlayback(item: VideoItem) {
         val player = controller ?: run { pendingStart = item; return }
 
-        replaceCurrent(player, item, positionMs = ResumeStore.startPosition(item.id))
+        val handOff = startAt?.takeIf { it.first == item.id }?.second
+        startAt = null
+        replaceCurrent(player, item, positionMs = handOff ?: ResumeStore.startPosition(item.id))
         player.play()
         if (selectedSubtitleLanguage != null) setSubtitleLanguage(selectedSubtitleLanguage)
         refreshTracks()
@@ -694,7 +697,10 @@ class PlayerState(private val scope: CoroutineScope) {
         // an HDR row falls back to a lower SDR height, leaving the player with no
         // video track at all.
         if (item.isLive) {
-            details = details?.copy(quality = height?.let { "${it}p" } ?: "Live")
+            // Live used to only relabel the quality while playback stayed on Auto. Now the
+            // chosen rendition of the HLS stream is actually pinned (or Auto restored).
+            val applied = applyLiveQuality(height)
+            details = details?.copy(quality = applied?.let { "${it}p" } ?: "Live")
             return
         }
 
@@ -707,6 +713,49 @@ class PlayerState(private val scope: CoroutineScope) {
         details = details?.copy(
             quality = picked.playedHeight?.let { "${it}p${if (picked.hdr) " HDR" else ""}" },
         )
+    }
+
+    /** Quality tiers the current live stream really offers, highest first; empty when not live. */
+    var liveQualities by mutableStateOf<List<Int>>(emptyList())
+        private set
+
+    /** A live video track is pinned through a track-selection override. */
+    private var liveOverride = false
+
+    private fun liveVideoTracks(): Pair<androidx.media3.common.Tracks.Group, List<Int>>? {
+        val group = controller?.currentTracks?.groups?.firstOrNull { it.type == C.TRACK_TYPE_VIDEO } ?: return null
+        val tiers = (0 until group.length).map { i ->
+            val f = group.getTrackFormat(i)
+            if (group.isTrackSupported(i) && f.height > 0) qualityTier(f.width, f.height) else 0
+        }
+        return group to tiers
+    }
+
+    /** Pins the live rendition closest to [height] (null = Auto). Returns the tier now pinned. */
+    private fun applyLiveQuality(height: Int?): Int? {
+        val player = controller ?: return null
+        val params = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        var pinned: Int? = null
+        if (height != null) {
+            liveVideoTracks()?.let { (group, tiers) ->
+                LiveQuality.pickTrack(tiers, height)?.let { index ->
+                    params.addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index))
+                    pinned = tiers[index]
+                }
+            }
+        }
+        liveOverride = pinned != null
+        player.trackSelectionParameters = params.build()
+        return pinned
+    }
+
+    private fun clearLiveQuality() {
+        liveQualities = emptyList()
+        if (!liveOverride) return
+        liveOverride = false
+        controller?.let {
+            it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO).build()
+        }
     }
 
     /** Refresh the audio-track list from the resolved stream info. */
@@ -926,6 +975,24 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
+    /**
+     * "Play in background" from Shorts: the Short continues in the main player (the one with the
+     * notification, lock-screen and headset controls) as audio only, from the same position.
+     * Same per-video, unsaved override as the button on the video screen.
+     */
+    fun playInBackground(item: VideoItem, positionMs: Long) {
+        backgroundAudioFor = item.id
+        BackgroundAudioOverride.videoId = item.id
+        startAt = item.id to positionMs
+        val alreadyOpen = current?.id == item.id && error == null
+        open(item, expand = false)
+        applyVideoTrack()
+        if (alreadyOpen) controller?.let { it.seekTo(positionMs); it.play() }
+    }
+
+    /** One-shot start position for [startPlayback] (Short handed off mid-way). */
+    private var startAt: Pair<String, Long>? = null
+
     private fun clearBackgroundAudio() {
         if (backgroundAudioFor == null && BackgroundAudioOverride.videoId == null) return
         backgroundAudioFor = null
@@ -1113,6 +1180,15 @@ class PlayerState(private val scope: CoroutineScope) {
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
             playingAudioFormat = describeAudio(tracks)
+            if (current?.isLive == true) {
+                val offered = liveVideoTracks()?.second?.let(LiveQuality::offered).orEmpty()
+                if (offered != liveQualities) liveQualities = offered
+                // A saved quality applies to live too, once its renditions are known.
+                val saved = QualityPreference.height
+                if (saved != null && !liveOverride && offered.isNotEmpty()) {
+                    applyLiveQuality(saved)?.let { details = details?.copy(quality = "${it}p") }
+                }
+            }
             val vs = controller?.videoSize ?: return
             if (vs.width <= 0 || vs.height <= 0) return
             val w = (vs.width * vs.pixelWidthHeightRatio).roundToInt()

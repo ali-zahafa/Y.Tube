@@ -48,6 +48,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Comment
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -233,6 +234,8 @@ fun ShortsScreen(
     active: Boolean = true,
     onOpenChannel: (String) -> Unit = {},
     onCommentsOpenChange: (Boolean) -> Unit = {},
+    /** Hands the current Short to the main player as audio-only background playback. */
+    onPlayInBackground: ((item: VideoItem, positionMs: Long) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -828,6 +831,13 @@ fun ShortsScreen(
                                 }
                             },
                             onShare = { share(item) },
+                            onBackground = onPlayInBackground?.let { handOff ->
+                                {
+                                    val position = exo.currentPosition
+                                    exo.pause()
+                                    handOff(item, position)
+                                }
+                            },
                             onComments = {
                                 pauseForOverlay()
                                 comments.load(item.id)
@@ -1100,6 +1110,7 @@ private fun ShortsRail(
     onDownload: () -> Unit,
     backdrop: Backdrop,
     glass: GlassSpec,
+    onBackground: (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier,
@@ -1127,6 +1138,15 @@ private fun ShortsRail(
         ShortsAction(Icons.Rounded.Comment, I18n.t("comments", "Comments"), backdrop = backdrop, glass = glass, onClick = onComments)
         ShortsAction(Icons.Rounded.Download, I18n.t("download", "Download"), backdrop = backdrop, glass = glass, onClick = onDownload)
         ShortsAction(Icons.Rounded.Share, I18n.t("share", "Share"), backdrop = backdrop, glass = glass, onClick = onShare)
+        if (onBackground != null) {
+            ShortsAction(
+                Icons.Rounded.Headphones,
+                I18n.t("background_short", "Background"),
+                backdrop = backdrop,
+                glass = glass,
+                onClick = onBackground,
+            )
+        }
     }
 }
 

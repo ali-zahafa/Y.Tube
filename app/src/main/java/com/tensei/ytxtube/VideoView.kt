@@ -1039,10 +1039,10 @@ fun QualitySheet(state: PlayerState, onDismiss: () -> Unit) {
                 onDismiss()
             }
 
-            val qualities = details.qualities.ifEmpty {
-                if (state.current?.isLive == true || details.item.isLive) {
-                    listOf(1080, 720, 480, 360, 240, 144)
-                } else emptyList()
+            val isLive = state.current?.isLive == true || details.item.isLive
+            // Live: the renditions the stream really carries, once known.
+            val qualities = state.liveQualities.takeIf { isLive && it.isNotEmpty() } ?: details.qualities.ifEmpty {
+                if (isLive) listOf(1080, 720, 480, 360, 240, 144) else emptyList()
             }
             qualities.forEach { h ->
                 QualityRow("${h}p", qualityTag(h), chosen == h && !chosenHdr) {

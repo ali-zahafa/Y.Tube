@@ -420,6 +420,14 @@ fun YtxTubeApp() {
         }
     }
 
+    // A Short handed to the main player as background audio: straight to the home screen,
+    // auto-PiP switched off first so no floating window opens.
+    fun playShortInBackground(item: VideoItem, positionMs: Long) {
+        player.playInBackground(item, positionMs)
+        pip.updateAutoPip(false)
+        activity.moveTaskToBack(true)
+    }
+
     fun handleIntent(inIntent: Intent?) {
         val target = parseIncomingIntent(inIntent) ?: return
         if (target.isShort) {
@@ -658,6 +666,7 @@ fun YtxTubeApp() {
                         openChannel = url
                     },
                     onCommentsOpenChange = { isShortsCommentsOpen = it },
+                    onPlayInBackground = { item, position -> playShortInBackground(item, position) },
                 )
                 Tab.Library -> LibraryScreen(
                     lib, contentPadding, onOpen = player::open, onOpenPlaylist = { ref -> if (ref.id == "DL") tab = Tab.Downloads else openPlaylist = ref },
@@ -912,6 +921,7 @@ fun YtxTubeApp() {
                     bottomInset = 12.dp,
                     startItem = entry,
                     active = openChannel == null && !openSearch,
+                    onPlayInBackground = { item, position -> playShortInBackground(item, position) },
                     onOpenChannel = { url ->
                         shortsEntry = null
                         player.expanded = false
