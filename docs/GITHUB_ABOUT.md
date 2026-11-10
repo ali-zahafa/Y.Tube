@@ -1,40 +1,38 @@
 # GitHub "About" settings for Y.tube
 
-Paste these into the repository's **About** box (gear icon on the repository home page) and **Settings → General**. They cannot be changed through a commit.
+Paste these into the repository's **About** box (⚙️ next to "About" on the repository home page). They cannot be changed through a commit.
 
 ## Repository name
 
 `Y.tube`
 
-## Description (max 350 characters)
+## Description (GitHub allows up to 350 characters)
 
-Open-source YouTube & YouTube Music client for Android: ad-free, real background play, fast video/audio downloads (M4A/Opus), Shorts, live streams, Android TV. Media3 ExoPlayer. | عميل يوتيوب مفتوح المصدر لأندرويد: بدون إعلانات، تشغيل في الخلفية، تحميل سريع للفيديو والصوت
-
-## Website
-
-Leave empty, or link the latest Actions build page.
+```
+Y.tube – free open-source YouTube alternative for Android: no ads, background play, fast video & audio downloads, Shorts, live streams, YouTube Music, Android TV. | بديل يوتيوب مجاني: بدون إعلانات، تشغيل في الخلفية، تحميل فيديو وصوت، شورتس، بث مباشر
+```
 
 ## Topics (GitHub allows up to 20; lowercase, hyphens only)
 
 ```
 youtube
+youtube-alternative
 youtube-client
-youtube-music
 youtube-downloader
+youtube-music
+youtube-shorts
+ad-free
+background-playback
+video-downloader
+audio-downloader
+streaming
+live-streaming
 android
 android-app
+android-tv
 kotlin
 jetpack-compose
-media3
 exoplayer
-background-playback
-audio-downloader
-video-downloader
-shorts
-ad-free
-newpipe-extractor
-android-tv
 sponsorblock
-picture-in-picture
 open-source
 ```
