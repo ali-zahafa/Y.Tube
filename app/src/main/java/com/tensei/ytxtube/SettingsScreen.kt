@@ -277,7 +277,7 @@ fun SettingsScreen(
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         }
                     }
-                    val ytxRepo = "https://github.com/ali-zahafa/YTXTube"
+                    val ytxRepo = "https://github.com/ali-zahafa/Y.tube"
                     SettingsRow(
                         icon = Icons.Rounded.Code,
                         title = I18n.t("open_source", "Open Source"),
@@ -1140,7 +1140,7 @@ private fun DownloadFolderSelectionDialog(
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Download/YTXTube Downloads",
+                            text = "Download/${DownloadFormats.DOWNLOADS_FOLDER}",
                             fontWeight = if (isDefault) FontWeight.SemiBold else FontWeight.Medium,
                             fontSize = 13.sp,
                             color = if (isDefault) c.primary else c.onSurface,
@@ -1158,7 +1158,7 @@ private fun DownloadFolderSelectionDialog(
 
                 Spacer(Modifier.height(6.dp))
 
-                val musicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "YTXTube").absolutePath
+                val musicDir = Downloads.musicDownloadDir().absolutePath
                 val isMusic = currentPath == musicDir
                 Row(
                     modifier = Modifier
@@ -1178,7 +1178,7 @@ private fun DownloadFolderSelectionDialog(
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Music/YTXTube",
+                            text = "Music/${DownloadFormats.MUSIC_FOLDER}",
                             fontWeight = if (isMusic) FontWeight.SemiBold else FontWeight.Medium,
                             fontSize = 13.sp,
                             color = if (isMusic) c.primary else c.onSurface,
@@ -1264,7 +1264,7 @@ private fun GeneralModificationContent(context: Context) {
             val path = if (docId.startsWith("primary:")) {
                 File(Environment.getExternalStorageDirectory(), docId.removePrefix("primary:"))
             } else {
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "YTXTube Downloads")
+                Downloads.defaultDownloadDir()
             }
             Downloads.setCustomDownloadDir(path)
         }
@@ -1473,8 +1473,7 @@ private fun GeneralModificationContent(context: Context) {
                 showFolderDialog = false
             },
             onSelectMusic = {
-                val musicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "YTXTube")
-                Downloads.setCustomDownloadDir(musicDir)
+                Downloads.setCustomDownloadDir(Downloads.musicDownloadDir())
                 showFolderDialog = false
             },
             onCustomPick = {

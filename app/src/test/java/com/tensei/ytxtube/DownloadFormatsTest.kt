@@ -143,6 +143,17 @@ class DownloadFormatsTest {
     }
 
     @Test
+    fun renamedFolder_pathsMoveWithIt_othersUntouched() {
+        val old = "/storage/emulated/0/Download/YTXTube Downloads"
+        val new = "/storage/emulated/0/Download/Y.tube Downloads"
+        assertEquals(new, DownloadFormats.remapLegacyPath(old, old, new))
+        assertEquals("$new/a.mp4", DownloadFormats.remapLegacyPath("$old/a.mp4", old, new))
+        // A different folder that merely starts with the same letters is not moved.
+        assertEquals("${old}2/a.mp4", DownloadFormats.remapLegacyPath("${old}2/a.mp4", old, new))
+        assertEquals("/sdcard/Movies", DownloadFormats.remapLegacyPath("/sdcard/Movies", old, new))
+    }
+
+    @Test
     fun transferComplete_requiresExactSize() {
         assertTrue(DownloadFormats.isTransferComplete(100, 100, 100))
         assertFalse(DownloadFormats.isTransferComplete(99, 100, 100))

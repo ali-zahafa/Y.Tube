@@ -184,6 +184,22 @@ object DownloadFormats {
         return minOf(downloaded + chunkBytes, total) - 1
     }
 
+    /** Public folders the app saves to (renamed from the previous "YTXTube" names). */
+    const val DOWNLOADS_FOLDER = "Y.tube Downloads"
+    const val LEGACY_DOWNLOADS_FOLDER = "YTXTube Downloads"
+    const val MUSIC_FOLDER = "Y.tube"
+    const val LEGACY_MUSIC_FOLDER = "YTXTube"
+
+    /**
+     * Points a saved path at the renamed folder: [path] equal to [legacyRoot] or inside it is
+     * moved under [newRoot]; anything else is returned unchanged.
+     */
+    fun remapLegacyPath(path: String, legacyRoot: String, newRoot: String): String = when {
+        path == legacyRoot -> newRoot
+        path.startsWith("$legacyRoot/") -> newRoot + path.removePrefix(legacyRoot)
+        else -> path
+    }
+
     /** Identity of one remote stream, used to decide whether a partial file still matches it. */
     fun streamIdentity(itag: Int, total: Long): String = "itag=$itag;len=$total"
 

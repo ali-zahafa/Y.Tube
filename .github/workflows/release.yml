@@ -1,5 +1,7 @@
 name: Build & Release
 
+# Publishing a GitHub release with a tag like v2.3.0 (or pushing such a tag) builds the signed
+# release APK and attaches it to that release as Y.tube.apk.
 on:
   push:
     tags:
@@ -30,42 +32,83 @@ jobs:
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
+      # The Y.tube signing key lives only in GitHub Secrets. Releases are never signed with a
+      # key that is stored in the repository.
+      - name: Restore signing key
+        env:
+          YTUBE_KEYSTORE_BASE64: ${{ secrets.YTUBE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$YTUBE_KEYSTORE_BASE64" ]; then
+            echo "::error::Missing secret YTUBE_KEYSTORE_BASE64. Add the YTUBE_* secrets in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "$YTUBE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ytube-release.jks"
+          echo "YTUBE_KEYSTORE_FILE=$RUNNER_TEMP/ytube-release.jks" >> "$GITHUB_ENV"
+
       - name: Build Release APK
+        env:
+          YTUBE_KEYSTORE_PASSWORD: ${{ secrets.YTUBE_KEYSTORE_PASSWORD }}
+          YTUBE_KEY_ALIAS: ${{ secrets.YTUBE_KEY_ALIAS }}
+          YTUBE_KEY_PASSWORD: ${{ secrets.YTUBE_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease --stacktrace
 
-      - name: Prepare APK Artifact
-        run: cp app/build/outputs/apk/release/app-release.apk YTXTube.apk
+      - name: Prepare APK
+        run: cp app/build/outputs/apk/release/app-release.apk Y.tube.apk
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ytube-release.jks"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YTXTube
-          path: YTXTube.apk
+          name: Y.tube-release-apk
+          path: Y.tube.apk
 
       - name: Set Release Title
         id: release_title
         if: startsWith(github.ref, 'refs/tags/')
-        run: echo "title=YTXTube ${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: echo "title=Y.tube ${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_title.outputs.title }}
-          files: YTXTube.apk
+          files: Y.tube.apk
           body: |
-            • Added multiple languages support.
-            • Fixed shorts icons & bottom bar.
-            • Fixed status bar color change.
-            • Added a few Switches in General settings.
-            • Added Youtube Like mini player.
-            • Fixed minor issues.
-            • Improved download engine with continuous streaming and resume support.
+            ## Y.tube ${{ github.ref_name }}
 
-            ### Release Signature Fingerprints
-            - **SHA-256**: `C4:12:EA:6D:B4:F2:15:18:27:E3:2F:33:D6:55:AD:BC:CA:EF:D8:F3:17:F6:0D:3B:BD:B2:A7:30:F4:F1:B7:F1`
-            - **SHA-1**: `99:B9:CB:6C:58:B2:42:6E:0E:3B:6C:E8:29:43:36:2C:9E:AB:39:4F`
-            - **Alias**: `androiddebugkey`
+            **Download:** `Y.tube.apk` below. Android 7.0+, one APK for phones, tablets and Android TV.
+
+            ### What's new
+            - New name: **Y.tube**
+            - **Background playback** setting, plus a one-tap **Play in background** button on videos and Shorts (straight to the home screen, no floating window)
+            - Playback notification **stays while paused**, with a **✕ close** button
+            - Pauses for phone calls, lowers volume for navigation, pauses when headphones or Bluetooth disconnect
+            - Recovers by itself after a dropped connection
+            - Optimised player (hardware-decoder-aware codecs, smoother adaptive quality)
+            - **Faster downloads**, and **audio-only downloads** with quality choice (original M4A / Opus, no fake MP3)
+            - **Live streams**: real quality switching
+            - **Channels** load all the way to the oldest uploads; swipe through a channel's Shorts; screen stays on during Shorts
+            - **Search filters**: upload date (24 hours, week, month, custom range) and type (Videos, Shorts, Live)
+
+            ### الجديد
+            - الاسم الجديد: **Y.tube**
+            - إعداد **التشغيل في الخلفية**، وزر **تشغيل في الخلفية** في الفيديوهات والشورتس (يخرجك على الشاشة الرئيسية من غير شاشة عائمة)
+            - إشعار التشغيل **بيفضل موجود وقت الإيقاف المؤقت** وفيه زر **✕** للإغلاق
+            - بيوقف وقت المكالمات، بيوطي الصوت مع تعليمات الخرائط، وبيوقف لما السماعة أو البلوتوث يفصل
+            - رجوع التشغيل تلقائياً بعد انقطاع النت
+            - مشغّل محسّن وجودة متغيرة أنعم
+            - **تحميل أسرع**، و**تحميل الصوت فقط** مع اختيار الجودة (M4A / Opus أصلي، مفيش MP3 مزيف)
+            - **البث المباشر**: تغيير حقيقي للجودة
+            - **القنوات** بتحمّل لحد أقدم فيديو، والتقليب بين شورتس القناة، والشاشة منورة وقت الشورتس
+            - **فلاتر البحث**: تاريخ الرفع (24 ساعة، أسبوع، شهر، فترة مخصصة) والنوع (فيديوهات، شورتس، بث مباشر)
+
+            ### Signing certificate / شهادة التوقيع
+            - **SHA-256:** `08:5E:C5:AC:E9:79:2F:22:65:9F:31:6A:55:A7:66:75:9F:86:77:F2:D9:52:CA:44:C0:57:C4:0E:7C:08:11:92`
+
+            > If an older debug build is installed, uninstall it first (different signature). / لو عندك نسخة debug قديمة، امسحها الأول (توقيع مختلف).
           draft: false
           prerelease: false
         env:

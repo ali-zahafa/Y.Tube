@@ -16,6 +16,10 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](#english)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square)](LICENSE)
 
+<a href="https://github.com/ali-zahafa/Y.tube/releases/latest/download/Y.tube.apk"><img src="https://img.shields.io/badge/Download-Y.tube.apk-E50914?style=for-the-badge&logo=android&logoColor=white" alt="Download Y.tube APK" /></a>
+&nbsp;
+<a href="https://github.com/ali-zahafa/Y.tube/archive/refs/heads/main.zip"><img src="https://img.shields.io/badge/Source-ZIP-555555?style=for-the-badge&logo=github&logoColor=white" alt="Download source ZIP" /></a>
+
 [English](#english) · [العربية](#arabic)
 
 </div>
@@ -67,7 +71,10 @@ Built with Kotlin, Jetpack Compose and AndroidX Media3 (ExoPlayer).
 
 ### 📥 Download
 
-APKs are built automatically by GitHub Actions on every change: **Actions → Android CI → latest run → Artifacts → `YTXTube-debug-apk`**. Unzip it, install `app-debug.apk`, and allow installs from unknown sources if asked.
+- **[⬇️ Download Y.tube.apk](https://github.com/ali-zahafa/Y.tube/releases/latest/download/Y.tube.apk)** — latest release, Android 7.0+, one APK for phones, tablets and Android TV
+- **[All releases](https://github.com/ali-zahafa/Y.tube/releases)** · **[Source code (ZIP)](https://github.com/ali-zahafa/Y.tube/archive/refs/heads/main.zip)**
+
+Open the APK on your phone and allow installs from unknown sources if asked. The app can also update itself: **Settings → Check for updates**.
 
 ### 🛠️ Build from source
 
@@ -125,7 +132,10 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk` (JDK 21 and th
 
 ### 📥 التحميل
 
-ملفات APK بتتبني تلقائياً على GitHub Actions مع كل تعديل: **Actions ← Android CI ← آخر تشغيل ← Artifacts ← `YTXTube-debug-apk`**. فك الضغط وثبّت `app-debug.apk`، ولو طلب منك اسمح بالتثبيت من مصادر غير معروفة.
+- **[⬇️ تحميل Y.tube.apk](https://github.com/ali-zahafa/Y.tube/releases/latest/download/Y.tube.apk)** — آخر إصدار، أندرويد 7.0 أو أحدث، ملف واحد للموبايل والتابلت والتلفزيون
+- **[كل الإصدارات](https://github.com/ali-zahafa/Y.tube/releases)** · **[الكود المصدري (ZIP)](https://github.com/ali-zahafa/Y.tube/archive/refs/heads/main.zip)**
+
+افتح ملف الـ APK على موبايلك، ولو طلب منك اسمح بالتثبيت من مصادر غير معروفة. والتطبيق بيقدر يحدّث نفسه: **الإعدادات ← Check for updates**.
 
 </div>
 

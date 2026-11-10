@@ -47,6 +47,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./gradlew :app:assembleDebug --stacktrace
 
+      # Compiles the shrunk (R8) release build too, so a release never fails at publish time.
+      # Not uploaded: real releases are signed by the release workflow with the Y.tube key.
+      - name: Verify release build
+        if: ${{ !cancelled() }}
+        run: ./gradlew :app:assembleRelease --stacktrace
+
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,6 +65,6 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: YTXTube-debug-apk
+          name: Y.tube-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

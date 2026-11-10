@@ -11,14 +11,24 @@ android {
         applicationId = "com.tensei.ytxtube"
         minSdk = 24
         targetSdk = 36
-        versionCode = 220
-        versionName = "2.2.0"
+        versionCode = 230
+        versionName = "2.3.0"
     }
 
+    // Y.tube release key: provided by the release workflow from GitHub Secrets (never committed).
+    val ytubeKeystore = System.getenv("YTUBE_KEYSTORE_FILE")?.let { file(it) }?.takeIf { it.exists() }
     signingConfigs {
         create("release") {
             val keystoreFile = file("release.keystore")
-            if (keystoreFile.exists()) {
+            if (ytubeKeystore != null) {
+                storeFile = ytubeKeystore
+                storePassword = System.getenv("YTUBE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("YTUBE_KEY_ALIAS")
+                keyPassword = System.getenv("YTUBE_KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            } else if (keystoreFile.exists()) {
                 storeFile = keystoreFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
                 keyAlias = System.getenv("KEY_ALIAS") ?: "androiddebugkey"
@@ -39,7 +49,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.findByName("release")?.takeIf { file("release.keystore").exists() } ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
+                ?.takeIf { ytubeKeystore != null || file("release.keystore").exists() }
+                ?: signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

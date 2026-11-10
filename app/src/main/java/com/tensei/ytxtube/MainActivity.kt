@@ -136,7 +136,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The notification's close button stops playback in the service; it then asks the
-        // visible UI (if any) to leave too, so YTXTube exits completely.
+        // visible UI (if any) to leave too, so Y.tube exits completely.
         AppExit.onExit = exitFromNotification
         enableEdgeToEdge()
         setHighestRefreshRate()

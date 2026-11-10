@@ -127,7 +127,7 @@ object SponsorBlock {
         val categories = JSONArray(Category.entries.map { it.key }).toString()
         val url = "https://sponsor.ajay.app/api/skipSegments/$prefix?categories=" +
             java.net.URLEncoder.encode(categories, "UTF-8") + "&actionType=skip"
-        val request = Request.Builder().url(url).header("User-Agent", "YTXTube/${BuildConfig.VERSION_NAME}").build()
+        val request = Request.Builder().url(url).header("User-Agent", "Y.tube/${BuildConfig.VERSION_NAME}").build()
         Net.client.newCall(request).execute().use { r ->
             if (r.code == 404) return emptyList()
             if (!r.isSuccessful) throw java.io.IOException("SponsorBlock ${r.code}")

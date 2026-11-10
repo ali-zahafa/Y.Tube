@@ -201,7 +201,46 @@ object Downloads {
 
     fun defaultDownloadDir(): File {
         val pubDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return File(pubDownloads, "YTXTube Downloads")
+        return File(pubDownloads, DownloadFormats.DOWNLOADS_FOLDER)
+    }
+
+    fun musicDownloadDir(): File =
+        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), DownloadFormats.MUSIC_FOLDER)
+
+    /** Old folder -> new folder, for the folders that were actually renamed on this device. */
+    private val renamedFolders = ArrayList<Pair<String, String>>()
+
+    /**
+     * The app used to save into "YTXTube Downloads" / "Music/YTXTube". Move those folders to the
+     * Y.tube names once, so existing downloads keep working. If the system refuses the move,
+     * the old folder simply stays in use and nothing is lost.
+     */
+    private fun migrateLegacyFolders() {
+        val pairs = listOf(
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), DownloadFormats.LEGACY_DOWNLOADS_FOLDER) to defaultDownloadDir(),
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), DownloadFormats.LEGACY_MUSIC_FOLDER) to musicDownloadDir(),
+        )
+        for ((old, new) in pairs) {
+            runCatching {
+                if (!old.isDirectory) return@runCatching
+                val moved = !new.exists() && old.renameTo(new)
+                if (moved) {
+                    Log.i(TAG, "moved ${old.absolutePath} to ${new.absolutePath}")
+                    renamedFolders += old.absolutePath to new.absolutePath
+                } else {
+                    Log.w(TAG, "kept ${old.absolutePath} (could not move it to ${new.name})")
+                }
+            }
+        }
+    }
+
+    private fun remapLegacy(path: String): String =
+        renamedFolders.fold(path) { p, (old, new) -> DownloadFormats.remapLegacyPath(p, old, new) }
+
+    /** The legacy folder stays in use when it could not be moved (keeps existing downloads visible). */
+    private fun legacyDefaultIfUnmoved(): File? {
+        val legacy = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), DownloadFormats.LEGACY_DOWNLOADS_FOLDER)
+        return legacy.takeIf { it.isDirectory && !defaultDownloadDir().exists() }
     }
 
     fun init(context: Context) {
@@ -210,11 +249,13 @@ object Downloads {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         fallbackDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: File(context.filesDir, "downloads")
-        val customPath = prefs.getString(KEY_CUSTOM_DIR, null)
+        migrateLegacyFolders()
+        val customPath = prefs.getString(KEY_CUSTOM_DIR, null)?.let(::remapLegacy)
+        if (customPath != null) prefs.edit().putString(KEY_CUSTOM_DIR, customPath).apply()
         val targetDir = if (!customPath.isNullOrBlank()) {
             File(customPath)
         } else {
-            defaultDownloadDir()
+            legacyDefaultIfUnmoved() ?: defaultDownloadDir()
         }
         dir = targetDir.apply { runCatching { mkdirs() } }
         initialized = true
@@ -765,7 +806,7 @@ object Downloads {
 
     private fun isWritable(folder: File): Boolean = runCatching {
         folder.mkdirs()
-        val probe = File(folder, ".ytxtube_probe.part")
+        val probe = File(folder, ".ytube_probe.part")
         probe.writeText("")
         probe.delete()
         true
@@ -1134,7 +1175,7 @@ object Downloads {
                         // Interrupted by the app being closed: offer Resume, keeping partial data.
                         else -> DownloadStatus.Paused
                     },
-                    directory = json.optString("dir").takeIf { it.isNotBlank() && it != "null" },
+                    directory = json.optString("dir").takeIf { it.isNotBlank() && it != "null" }?.let(::remapLegacy),
                     detail = json.optString("detail").takeIf { it != "null" }.orEmpty(),
                     audioItag = json.optInt("aitag", 0),
                 )

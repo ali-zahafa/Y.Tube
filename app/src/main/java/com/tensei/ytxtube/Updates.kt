@@ -81,18 +81,23 @@ data class UpdateInfo(
     val sizeBytes: Long,
 )
 
+/** File name of the APK attached to each GitHub release. */
+private const val APK_NAME = "Y.tube.apk"
+
 /**
  * Shown when the GitHub release body is empty (or when testing an APK that is
  * newer than the latest published release). Keep this in sync with the build.
  */
 internal val RELEASE_NOTES = """
-    • Added Caption support: Choose from all available subtitle and caption languages in the player without playback interruption.
-    • Fixed bottom bar: Liquid Glass active pill now renders behind tab icons and labels, matches glass blur at rest, and clears on hold.
-    • Added multiple Google/YouTube account login: Easily add, switch between, or remove accounts with smooth switching animations.
-    • Added landscape video gestures switch: Easily turn on or off volume (right edge) and brightness (left edge) vertical swipes in Settings.
-    • Adaptive stream quality: Auto resolution adapts to your measured connection speed to prevent buffering on videos and Shorts.
-    • Reorganized Settings: Appearance & Theme followed by General with corrected switch text layouts.
-    • Replaced header mark with the official YTXTube app icon.
+    • New name: Y.tube.
+    • Background playback setting, plus a one-tap "Play in background" button on videos and Shorts.
+    • Playback notification stays while paused, with a close button.
+    • Pauses for calls, ducks for navigation, pauses when headphones or Bluetooth disconnect.
+    • Recovers by itself after a dropped connection.
+    • Faster downloads, and audio-only downloads with quality choice (M4A / Opus).
+    • Live streams: real quality switching.
+    • Channels load all the way to their oldest videos; swipe through a channel's Shorts.
+    • Search filters: upload date and type.
 """.trimIndent()
 
 /**
@@ -201,9 +206,9 @@ class UpdateState(private val scope: CoroutineScope) {
 
     private fun fetchLatest(): UpdateInfo? {
         val request = Request.Builder()
-            .url("https://api.github.com/repos/ali-zahafa/YTXTube/releases/latest")
+            .url("https://api.github.com/repos/ali-zahafa/Y.tube/releases/latest")
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "YTXTube/${BuildConfig.VERSION_NAME}")
+            .header("User-Agent", "Y.tube/${BuildConfig.VERSION_NAME}")
             .build()
         Net.client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
@@ -220,11 +225,13 @@ class UpdateState(private val scope: CoroutineScope) {
                 if (!name.endsWith(".apk", ignoreCase = true)) continue
                 val candidate = asset.optString("browser_download_url")
                 if (candidate.isBlank()) continue
-                if (apkUrl == null || name.equals("YTXTube.apk", ignoreCase = true)) {
+                // Releases publish Y.tube.apk (older ones used YTXTube.apk).
+                val preferred = name.equals(APK_NAME, ignoreCase = true) || name.equals("YTXTube.apk", ignoreCase = true)
+                if (apkUrl == null || preferred) {
                     apkUrl = candidate
                     size = asset.optLong("size")
                 }
-                if (name.equals("YTXTube.apk", ignoreCase = true)) break
+                if (preferred) break
             }
             val url = apkUrl ?: return null
             return UpdateInfo(
@@ -243,11 +250,11 @@ class UpdateState(private val scope: CoroutineScope) {
         onProgress: (Float) -> Unit,
     ): File {
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        val target = File(dir, "YTXTube.apk")
+        val target = File(dir, APK_NAME)
         if (target.exists()) target.delete()
         val request = Request.Builder()
             .url(update.apkUrl)
-            .header("User-Agent", "YTXTube/${BuildConfig.VERSION_NAME}")
+            .header("User-Agent", "Y.tube/${BuildConfig.VERSION_NAME}")
             .build()
         Net.client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("HTTP ${response.code}")
@@ -446,7 +453,7 @@ fun UpdateOverlay(state: UpdateState, backdrop: Backdrop) {
                         )
                         Spacer(Modifier.height(7.dp))
                         Text(
-                            "${(state.progress * 100).toInt()}% · downloading YTXTube.apk",
+                            "${(state.progress * 100).toInt()}% · downloading $APK_NAME",
                             color = c.onSurfaceVariant,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Medium,
