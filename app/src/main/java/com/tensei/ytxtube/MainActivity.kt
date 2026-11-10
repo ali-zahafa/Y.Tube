@@ -126,13 +126,18 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     internal var playerHolder: PlayerState? = null
     internal var shortsPlayerHolder: androidx.media3.exoplayer.ExoPlayer? = null
     internal var pipController: PipController? = null
     internal var intentHandler: ((Intent) -> Unit)? = null
+    private val exitFromNotification: () -> Unit = { finishAndRemoveTask() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The notification's close button stops playback in the service; it then asks the
+        // visible UI (if any) to leave too, so YTXTube exits completely.
+        AppExit.onExit = exitFromNotification
         enableEdgeToEdge()
         setHighestRefreshRate()
         enableHdrOutput()
@@ -142,7 +147,26 @@ class MainActivity : ComponentActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        requestLegacyStoragePermissionOnce()
         setContent { YtxTubeTheme { YtxTubeApp() } }
+    }
+
+    /**
+     * Android 10 and older need WRITE_EXTERNAL_STORAGE to save into the public Download folder.
+     * Asked once; if refused, downloads still work and go to the app's own folder instead.
+     */
+    private fun requestLegacyStoragePermissionOnce() {
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.Q) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) return
+        val prefs = getSharedPreferences("downloads", MODE_PRIVATE)
+        if (prefs.getBoolean("storage_permission_asked", false)) return
+        prefs.edit().putBoolean("storage_permission_asked", true).apply()
+        storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
+
+    override fun onDestroy() {
+        if (AppExit.onExit === exitFromNotification) AppExit.onExit = null
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -172,7 +196,7 @@ class MainActivity : ComponentActivity() {
         val pip = pipController ?: return
         if (!pip.supported) return
         val p = playerHolder
-        if (p != null && p.isPlaying && !p.isMusicMode) {
+        if (p != null && p.isPlaying && !p.isMusicMode && !p.audioOnlyActive) {
             pip.enter(p.videoAspect.takeIf { it > 0 } ?: (16f / 9f))
         }
     }
@@ -269,6 +293,8 @@ fun YtxTubeApp() {
     var openPlaylist by remember { mutableStateOf<PlaylistRef?>(null) }
     var openChannel by remember { mutableStateOf<String?>(null) }
     var shortsEntry by remember { mutableStateOf<VideoItem?>(null) }
+    // Channel a Short was opened from, so the Shorts player can swipe through that channel's Shorts.
+    var shortsEntryChannel by remember { mutableStateOf<ChannelState?>(null) }
     var openAllSubscriptions by remember { mutableStateOf(false) }
     var openSearch by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf(Tab.Home) }
@@ -332,10 +358,14 @@ fun YtxTubeApp() {
 
 
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val lifecycleActivity = LocalContext.current as? Activity
     DisposableEffect(lifecycle) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_STOP -> player.setBackground(true)
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> player.setBackground(
+                    background = true,
+                    changingConfigurations = lifecycleActivity?.isChangingConfigurations == true,
+                )
                 androidx.lifecycle.Lifecycle.Event.ON_START -> player.setBackground(false)
                 else -> Unit
             }
@@ -370,7 +400,7 @@ fun YtxTubeApp() {
     val orientation = rememberOrientationController(activity)
     val playerOpen = player.current != null && player.expanded
 
-    orientation.Bind(playerOpen && !AudioOnly.enabled && !player.isMusicMode)
+    orientation.Bind(playerOpen && !player.audioOnlyActive && !player.isMusicMode)
     val pip = remember(activity) { PipController(activity as ComponentActivity) }
 
     SideEffect {
@@ -378,7 +408,8 @@ fun YtxTubeApp() {
         mainActivity?.pipController = pip
     }
 
-    val isVideoPlaying = player.isPlaying && !player.isMusicMode
+    // "Play in background" means audio only with no floating window, so PiP stays off for it.
+    val isVideoPlaying = player.isPlaying && !player.isMusicMode && !player.audioOnlyActive
     val isShortsPlaying = (tab == Tab.Shorts || shortsEntry != null) && mainActivity?.shortsPlayerHolder?.isPlaying == true
 
     LaunchedEffect(isVideoPlaying, isShortsPlaying, player.videoAspect) {
@@ -389,6 +420,14 @@ fun YtxTubeApp() {
         } else {
             pip.updateAutoPip(false)
         }
+    }
+
+    // A Short handed to the main player as background audio: straight to the home screen,
+    // auto-PiP switched off first so no floating window opens.
+    fun playShortInBackground(item: VideoItem, positionMs: Long) {
+        player.playInBackground(item, positionMs)
+        pip.updateAutoPip(false)
+        activity.moveTaskToBack(true)
     }
 
     fun handleIntent(inIntent: Intent?) {
@@ -629,6 +668,7 @@ fun YtxTubeApp() {
                         openChannel = url
                     },
                     onCommentsOpenChange = { isShortsCommentsOpen = it },
+                    onPlayInBackground = { item, position -> playShortInBackground(item, position) },
                 )
                 Tab.Library -> LibraryScreen(
                     lib, contentPadding, onOpen = player::open, onOpenPlaylist = { ref -> if (ref.id == "DL") tab = Tab.Downloads else openPlaylist = ref },
@@ -716,6 +756,7 @@ fun YtxTubeApp() {
                     onOpen = player::open,
                     onOpenShort = { video ->
                         player.expanded = false
+                        shortsEntryChannel = ch
                         shortsEntry = video
                     },
                     onMessage = { player.actionMessage = it },
@@ -882,7 +923,9 @@ fun YtxTubeApp() {
                     onSearch = { openSearch = true },
                     bottomInset = 12.dp,
                     startItem = entry,
+                    channel = shortsEntryChannel?.takeIf { ch -> ch.shorts.any { it.id == entry.id } },
                     active = openChannel == null && !openSearch,
+                    onPlayInBackground = { item, position -> playShortInBackground(item, position) },
                     onOpenChannel = { url ->
                         shortsEntry = null
                         player.expanded = false

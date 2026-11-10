@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Only needed to save downloads into the public Download folder on Android 10 and older.
+         Newer versions write there under scoped storage without any permission. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
 
     <!-- One APK for phones, tablets and Android TV: none of this hardware is mandatory. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -25,6 +30,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.YTXTube">
 

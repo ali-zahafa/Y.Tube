@@ -86,7 +86,31 @@ class InnerTubeParseTest {
         assertTrue("got ${page.videos.size}", page.videos.size >= 10)
         assertTrue("members-only leaked: ${page.videos.filter { "Insider Edition" in it.title }.map { it.title }}",
             page.videos.none { "Insider Edition" in it.title })
-        assertNotNull("channel continuation", page.next)
+        // This channel has 27 videos, all on this first page, so there is no next page. The only
+        // continuation items in the response belong to the header's About panel; using one of them
+        // as "next page" is what made channels stop after their first page.
+        assertEquals(null, page.next)
+    }
+
+    @Test fun channelNextPageIgnoresHeaderPanels() {
+        val root = JSONObject(
+            """
+            {"contents":{"richGridRenderer":{
+               "header":{"chipBar":{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"CHIP"}}}}},
+               "contents":[
+                 {"richItemRenderer":{"content":{"videoRenderer":{"videoId":"aaaaaaaaaaa","title":{"simpleText":"One"}}}}},
+                 {"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"GRID_PAGE_2"}}}}
+               ]}},
+             "header":{"pageHeaderRenderer":{"engagementPanel":{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"ABOUT_PANEL"}}}}}}}
+            """.trimIndent(),
+        )
+        assertEquals("GRID_PAGE_2", InnerTube.parseFeed(root).next)
+        // Continuation responses carry the next page in onResponseReceivedActions.
+        val more = JSONObject(
+            """{"onResponseReceivedActions":[{"appendContinuationItemsAction":{"continuationItems":[
+                {"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"PAGE_3"}}}}]}}]}""",
+        )
+        assertEquals("PAGE_3", InnerTube.parseFeed(more).next)
     }
 
     
@@ -108,6 +132,11 @@ class InnerTubeParseTest {
         assertEquals(1_100L, InnerTube.parseViews("1.1K videos"))
         assertEquals(0L, InnerTube.parseViews("No views"))
         assertEquals(-1L, InnerTube.parseViews(null))
+        // Indian units still parse, and English words containing "cr" no longer do.
+        assertEquals(12_000_000L, InnerTube.parseViews("1.2 crore views"))
+        assertEquals(15_000_000L, InnerTube.parseViews("1.5Cr views"))
+        assertEquals(21_000L, InnerTube.parseViews("21K subscribers"))
+        assertEquals(350L, InnerTube.parseViews("350 scrobbles"))
     }
 
     @Test fun channelHeaderFromVideosTab() {

@@ -171,7 +171,7 @@ class UpdateState(private val scope: CoroutineScope) {
     fun install(context: Context) {
         val file = downloaded ?: return
         if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
-            error = "Allow installs from YTXTube, then tap Install again."
+            error = "Allow installs from Y.tube, then tap Install again."
             runCatching {
                 context.startActivity(
                     Intent(
@@ -201,7 +201,7 @@ class UpdateState(private val scope: CoroutineScope) {
 
     private fun fetchLatest(): UpdateInfo? {
         val request = Request.Builder()
-            .url("https://api.github.com/repos/Koustubh12345/YTXTube/releases/latest")
+            .url("https://api.github.com/repos/ali-zahafa/YTXTube/releases/latest")
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "YTXTube/${BuildConfig.VERSION_NAME}")
             .build()
@@ -379,7 +379,7 @@ fun UpdateOverlay(state: UpdateState, backdrop: Backdrop) {
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                "YTXTube ${update?.version.orEmpty()}" +
+                                "Y.tube ${update?.version.orEmpty()}" +
                                     formatUpdateSize(update?.sizeBytes ?: 0L).let { if (it.isBlank()) "" else " · $it" },
                                 color = c.onSurfaceVariant,
                                 fontSize = 12.5.sp,

@@ -24,6 +24,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -65,8 +67,20 @@ class DownloadTask(
     downloaded: Long = 0L,
     total: Long = -1L,
     status: DownloadStatus = DownloadStatus.Queued,
+    directory: String? = null,
+    detail: String = "",
+    /** itag of the audio stream the user picked in the Audio only section; 0 = default (best M4A). */
+    val audioItag: Int = 0,
 ) {
-    val key: String get() = "$videoId@$height"
+    val key: String get() = if (audioItag > 0) "$videoId@a$audioItag" else "$videoId@$height"
+
+    /** Folder this download is written to; null means the current download folder (older entries). */
+    var directory by mutableStateOf(directory)
+        internal set
+
+    /** Real format of the saved file, e.g. "M4A · AAC · 129 kbps"; empty until known. */
+    var detail by mutableStateOf(detail)
+        internal set
 
     var downloaded by mutableStateOf(downloaded)
         internal set
@@ -84,7 +98,7 @@ class DownloadTask(
             else -> 0f
         }
 
-    val file: File get() = Downloads.fileFor(fileName)
+    val file: File get() = directory?.let { File(it, fileName) } ?: Downloads.fileFor(fileName)
     val localUri: String get() = Uri.fromFile(file).toString()
     val played: Boolean get() = status == DownloadStatus.Complete && file.exists()
 }
@@ -98,10 +112,21 @@ data class DownloadOption(
     val estimatedBytes: Long,
     val container: String = "mp4",
     val hdr: Boolean = false,
+    /** True when [estimatedBytes] is the exact size reported by YouTube, false for a bitrate estimate. */
+    val sizeExact: Boolean = false,
 ) {
     val needsMux: Boolean get() = muxed == null
     val label: String get() = "${height}p${if (hdr) " HDR" else ""}"
-    val containerLabel: String get() = if (container == "webm") "WebM" else "MP4"
+    val containerLabel: String get() = DownloadFormats.containerLabel(container, audioOnly = false)
+
+    /** e.g. "MP4 · H.264 + AAC 128 kbps", built only from what the streams report. */
+    val formatDetail: String
+        get() {
+            val v = muxed ?: video
+            val audioCodec = if (muxed != null) muxed.codec?.substringAfter(',', "")?.trim()?.ifBlank { null } ?: "mp4a" else audio?.codec
+            val kbps = if (muxed != null) 0 else DownloadFormats.kbps(max(audio?.averageBitrate ?: 0, audio?.bitrate ?: 0))
+            return DownloadFormats.describe(container, audioOnly = false, videoCodec = v?.codec, audioCodec = audioCodec, audioKbps = kbps)
+        }
 }
 
 
@@ -111,6 +136,27 @@ data class DownloadOption(
 
 
 
+
+/** One original audio stream offered in the Audio only section of the download dialog. */
+data class AudioDownloadOption(
+    val stream: AudioStream,
+    /** "m4a" or "webm": the stream's own container, saved as-is. */
+    val container: String,
+    val bitsPerSecond: Int,
+    val estimatedBytes: Long,
+    val sizeExact: Boolean,
+    /** The highest-quality original stream. */
+    val best: Boolean,
+) {
+    val itag: Int get() = stream.itag
+    val kbps: Int get() = DownloadFormats.kbps(bitsPerSecond)
+    val codecLabel: String get() = DownloadFormats.audioCodecLabel(stream.codec)
+        ?: if (container == "webm") "Opus" else "AAC"
+
+    /** e.g. "M4A · AAC · 129 kbps". */
+    val formatDetail: String
+        get() = DownloadFormats.describe(container, audioOnly = true, videoCodec = null, audioCodec = stream.codec ?: codecLabel, audioKbps = kbps)
+}
 
 object Downloads {
     private const val MAX_ACTIVE = 2
@@ -139,6 +185,10 @@ object Downloads {
 
     private lateinit var dir: File
     private lateinit var prefs: android.content.SharedPreferences
+    private lateinit var appContext: Context
+
+    /** App-specific folder that never needs a storage permission; used when the public one is not writable. */
+    private lateinit var fallbackDir: File
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     private val pumpLock = Any()
@@ -156,7 +206,10 @@ object Downloads {
 
     fun init(context: Context) {
         if (initialized) return
+        appContext = context.applicationContext
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        fallbackDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: File(context.filesDir, "downloads")
         val customPath = prefs.getString(KEY_CUSTOM_DIR, null)
         val targetDir = if (!customPath.isNullOrBlank()) {
             File(customPath)
@@ -188,6 +241,46 @@ object Downloads {
         val info = StreamCache.getOrLoad(id)
         HdrFormats.install(id, info)
         optionsFor(info)
+    }
+
+    /** The original audio streams of this video that can be saved without conversion, best first. */
+    suspend fun audioOptions(id: String): List<AudioDownloadOption> = withContext(Dispatchers.IO) {
+        audioOptionsFor(StreamCache.getOrLoad(id))
+    }
+
+    private fun audioContainer(stream: AudioStream): String? = when {
+        stream.format == StreamFormat.M4A -> "m4a"
+        stream.format == StreamFormat.WEBMA_OPUS -> "webm"
+        stream.format == StreamFormat.WEBMA && stream.codec.orEmpty().startsWith("opus") -> "webm"
+        else -> null
+    }
+
+    private fun audioOptionsFor(info: StreamInfo): List<AudioDownloadOption> {
+        val streams = info.audioStreams.filter {
+            it.isUrl && it.deliveryMethod == org.schabi.newpipe.extractor.stream.DeliveryMethod.PROGRESSIVE_HTTP &&
+                audioContainer(it) != null
+        }
+        val chosen = DownloadFormats.audioChoices(streams) { s ->
+            DownloadFormats.AudioCandidate(
+                itag = s.itag,
+                container = audioContainer(s) ?: "",
+                bitsPerSecond = DownloadFormats.audioBitsPerSecond(s.bitrate, s.averageBitrate),
+                original = s.audioTrackType == null ||
+                    s.audioTrackType == org.schabi.newpipe.extractor.stream.AudioTrackType.ORIGINAL,
+            )
+        }
+        return chosen.mapIndexed { index, s ->
+            val bps = DownloadFormats.audioBitsPerSecond(s.bitrate, s.averageBitrate)
+            val exact = s.itagItem?.contentLength?.takeIf { it > 0 }
+            AudioDownloadOption(
+                stream = s,
+                container = audioContainer(s) ?: DownloadFormats.AUDIO_EXTENSION,
+                bitsPerSecond = bps,
+                estimatedBytes = exact ?: DownloadFormats.estimateBytes(bps, info.duration),
+                sizeExact = exact != null,
+                best = index == 0,
+            )
+        }
     }
 
     private fun optionsFor(info: StreamInfo): List<DownloadOption> {
@@ -265,6 +358,14 @@ object Downloads {
         container: String,
         hdr: Boolean,
     ): DownloadOption {
+        val exact = if (muxed != null) {
+            muxed.itagItem?.contentLength?.takeIf { it > 0 }
+        } else {
+            val v = video?.itagItem?.contentLength?.takeIf { it > 0 }
+            val a = audio?.itagItem?.contentLength?.takeIf { it > 0 }
+            if (v != null && a != null) v + a else null
+        }
+        if (exact != null) return DownloadOption(height, muxed, video, audio, exact, container, hdr, sizeExact = true)
         val bits = if (muxed != null) muxed.bitrate.toLong()
         else (video?.bitrate ?: 0).toLong() + (audio?.averageBitrate ?: 0)
         val estimate = if (bits > 0 && info.duration > 0) bits * info.duration / 8 else -1L
@@ -291,7 +392,7 @@ object Downloads {
         if (!initialized) return false
         val key = "${video.id}@0"
         if (tasks.any { it.key == key }) return false
-        val name = fileNameFor(video, 0)
+        val name = DownloadFormats.fileName(video.title, video.id, 0)
         val task = DownloadTask(
             videoId = video.id,
             title = video.title,
@@ -300,7 +401,37 @@ object Downloads {
             durationSec = video.durationSec,
             height = 0,
             fileName = name,
+            container = DownloadFormats.AUDIO_EXTENSION,
             status = DownloadStatus.Queued,
+            directory = dir.absolutePath,
+        )
+        tasks.add(0, task)
+        persist()
+        pump()
+        return true
+    }
+
+    /** Downloads exactly the audio stream picked in the dialog, in its own container. */
+    fun enqueueAudio(video: VideoItem, option: AudioDownloadOption): Boolean {
+        if (!initialized) return false
+        val key = "${video.id}@a${option.itag}"
+        if (tasks.any { it.key == key }) return false
+        val name = DownloadFormats.fileName(video.title, video.id, 0, option.container, audioKbps = option.kbps)
+        if (tasks.any { it.fileName == name }) return false
+        val task = DownloadTask(
+            videoId = video.id,
+            title = video.title,
+            channel = video.channel,
+            thumbnail = video.thumbnail,
+            durationSec = video.durationSec,
+            height = 0,
+            fileName = name,
+            container = option.container,
+            total = option.estimatedBytes,
+            status = DownloadStatus.Queued,
+            directory = dir.absolutePath,
+            detail = option.formatDetail,
+            audioItag = option.itag,
         )
         tasks.add(0, task)
         persist()
@@ -312,7 +443,7 @@ object Downloads {
         if (!initialized) return false
         val key = "${video.id}@${option.height}"
         if (tasks.any { it.key == key }) return false
-        val name = fileNameFor(video, option.height, option.container, option.hdr)
+        val name = DownloadFormats.fileName(video.title, video.id, option.height, option.container, option.hdr)
         val task = DownloadTask(
             videoId = video.id,
             title = video.title,
@@ -324,6 +455,8 @@ object Downloads {
             container = option.container,
             hdr = option.hdr,
             status = DownloadStatus.Queued,
+            directory = dir.absolutePath,
+            detail = option.formatDetail,
         )
         tasks.add(0, task)
         persist()
@@ -341,11 +474,19 @@ object Downloads {
         pump()
     }
 
+    /**
+     * Continues a paused download, or retries a failed one. Partial data is kept: when the
+     * download starts again each part is only continued if the server supports byte ranges
+     * and the part still matches the same stream (see [preparePartial]); otherwise it restarts.
+     */
     fun resume(task: DownloadTask) {
         if (task.status != DownloadStatus.Paused && task.status != DownloadStatus.Failed) return
-        deleteWork(task)
-        task.downloaded = 0L
-        task.total = -1L
+        if (task.status == DownloadStatus.Failed) {
+            // A failure may have left damaged data behind: retry from scratch.
+            deleteWork(task)
+            task.downloaded = 0L
+            task.total = -1L
+        }
         task.error = null
         task.status = DownloadStatus.Queued
         persist()
@@ -375,7 +516,11 @@ object Downloads {
         lastReport.clear()
         prefs.edit().putString(PERSIST_KEY, "[]").apply()
 
-        runCatching { dir.listFiles()?.forEach { if (it.isFile && it.name.endsWith(".part")) it.delete() } }
+        runCatching {
+            dir.listFiles()?.forEach {
+                if (it.isFile && (it.name.endsWith(".part") || it.name.endsWith(".part.meta"))) it.delete()
+            }
+        }
     }
 
     /** Permanently deletes all downloaded video/music files and clears all tasks. */
@@ -415,9 +560,15 @@ object Downloads {
                 } catch (t: Throwable) {
                     if (attempt < 2) {
                         attempt++
+                        Log.w(TAG, "download ${task.key} attempt $attempt failed; retrying", t)
                         StreamCache.invalidate(task.videoId)
-                        deleteWork(task)
-                        task.downloaded = 0L
+                        // Parts that finished downloading are reused (validated again by
+                        // preparePartial). If combining or verifying failed, start clean.
+                        if (task.status == DownloadStatus.Processing || t is DamagedFileException) {
+                            deleteWork(task)
+                            task.downloaded = 0L
+                        }
+                        task.status = DownloadStatus.Downloading
                         kotlinx.coroutines.delay(1000L * attempt)
                         continue
                     }
@@ -430,7 +581,7 @@ object Downloads {
             }
         } catch (t: Throwable) {
             Log.w(TAG, "download ${task.key} failed", t)
-            task.error = t.message ?: "Download failed"
+            task.error = friendlyError(t)
             task.status = DownloadStatus.Failed
             deleteWork(task)
         } finally {
@@ -442,74 +593,88 @@ object Downloads {
 
     private suspend fun runDownload(task: DownloadTask) {
         task.status = DownloadStatus.Downloading
+        writableDirFor(task)
         StreamCache.invalidate(task.videoId)
         val info = StreamCache.getOrLoad(task.videoId)
         HdrFormats.install(task.videoId, info)
+        val ctx = currentCoroutineContext()
 
         if (task.height == 0) {
-            val audio = bestAudio(info, webm = false) ?: throw IOException("Audio stream not available")
+            val audio = if (task.audioItag > 0) {
+                // The exact stream picked in the dialog (fresh URL, same itag).
+                audioOptionsFor(info).firstOrNull { it.itag == task.audioItag }?.stream
+                    ?: throw IOException("That audio quality is no longer available")
+            } else {
+                bestAudio(info, webm = false) ?: throw IOException("No M4A audio stream is offered for this video")
+            }
+            task.detail = DownloadFormats.describe(
+                container = if (task.audioItag > 0) task.container else DownloadFormats.AUDIO_EXTENSION,
+                audioOnly = true,
+                videoCodec = null,
+                audioCodec = audio.codec,
+                audioKbps = DownloadFormats.kbps(DownloadFormats.audioBitsPerSecond(audio.bitrate, audio.averageBitrate)),
+            )
             val work = workFile(task, "audio")
             val remote = probe(audio.content)
+            preparePartial(work, remote, audio.itag)
             task.total = remote.total
-            val aDone = AtomicLong(if (work.exists()) work.length() else 0L)
+            val aDone = AtomicLong(work.lengthOrZero())
+            task.downloaded = aDone.get()
             val received = transfer(audio.content, work, remote) { n -> report(task, aDone.addAndGet(n)) }
-            if (received != remote.total || work.length() != remote.total) {
+            if (!DownloadFormats.isTransferComplete(received, work.length(), remote.total)) {
                 throw IOException("Audio download incomplete (${work.length()} of ${remote.total} bytes)")
             }
+            ctx.ensureActive()
             val target = task.file
-            target.delete()
-            if (!work.renameTo(target)) {
-                work.copyTo(target, overwrite = true)
-                work.delete()
-            }
-            task.total = target.length()
-            task.downloaded = task.total
-            task.status = DownloadStatus.Complete
+            moveInto(work, target)
+            verifyMediaFile(target, needVideo = false, needAudio = true)
+            finishTask(task, target)
             return
         }
 
         val option = optionsFor(info).firstOrNull { it.height == task.height }
             ?: throw IOException("That quality is no longer available")
+        task.detail = option.formatDetail
         val muxed = option.muxed
 
         if (muxed != null) {
             task.total = option.estimatedBytes
             val work = workFile(task, "video")
             val remote = probe(muxed.content)
+            preparePartial(work, remote, muxed.itag)
             task.total = remote.total
-            val mDone = AtomicLong(if (work.exists()) work.length() else 0L)
+            val mDone = AtomicLong(work.lengthOrZero())
+            task.downloaded = mDone.get()
             val received = transfer(muxed.content, work, remote) { n -> report(task, mDone.addAndGet(n)) }
-            if (received != remote.total || work.length() != remote.total) {
+            if (!DownloadFormats.isTransferComplete(received, work.length(), remote.total)) {
                 throw IOException("Download incomplete (${work.length()} of ${remote.total} bytes)")
             }
+            ctx.ensureActive()
             val target = task.file
-            target.delete()
-            if (!work.renameTo(target)) {
-                work.copyTo(target, overwrite = true)
-                work.delete()
-            }
-            task.total = target.length()
-            task.downloaded = task.total
+            moveInto(work, target)
+            verifyMediaFile(target, needVideo = true, needAudio = true)
+            finishTask(task, target)
         } else {
             val video = option.video ?: throw IOException("No video stream")
             val audio = option.audio ?: throw IOException("No audio stream")
             task.total = option.estimatedBytes
             val vWork = workFile(task, "video")
             val aWork = workFile(task, "audio")
-            vWork.delete()
-            aWork.delete()
 
             val vRemote = probe(video.content)
             val aRemote = probe(audio.content)
+            preparePartial(vWork, vRemote, video.itag)
+            preparePartial(aWork, aRemote, audio.itag)
             task.total = vRemote.total + aRemote.total
-            val vDone = AtomicLong(0)
-            val aDone = AtomicLong(0)
+            val vDone = AtomicLong(vWork.lengthOrZero())
+            val aDone = AtomicLong(aWork.lengthOrZero())
+            task.downloaded = vDone.get() + aDone.get()
             coroutineScope {
                 launch {
                     val n = transfer(video.content, vWork, vRemote) { n ->
                         report(task, vDone.addAndGet(n) + aDone.get())
                     }
-                    if (n != vRemote.total || vWork.length() != vRemote.total) {
+                    if (!DownloadFormats.isTransferComplete(n, vWork.length(), vRemote.total)) {
                         throw IOException("Video download incomplete (${vWork.length()} of ${vRemote.total} bytes)")
                     }
                 }
@@ -517,7 +682,7 @@ object Downloads {
                     val n = transfer(audio.content, aWork, aRemote) { n ->
                         report(task, aDone.addAndGet(n) + vDone.get())
                     }
-                    if (n != aRemote.total || aWork.length() != aRemote.total) {
+                    if (!DownloadFormats.isTransferComplete(n, aWork.length(), aRemote.total)) {
                         throw IOException("Audio download incomplete (${aWork.length()} of ${aRemote.total} bytes)")
                     }
                 }
@@ -528,18 +693,129 @@ object Downloads {
 
             val target = task.file
             target.delete()
-            mux(vWork, aWork, target, option.container)
-            vWork.delete()
-            aWork.delete()
-            if (!target.exists() || target.length() <= 0L) throw IOException("Could not finish the download")
-            task.total = target.length()
-            task.downloaded = task.total
+            mux(vWork, aWork, target, option.container) { ctx.ensureActive() }
+            verifyMediaFile(target, needVideo = true, needAudio = true)
+            deleteWork(task)
+            finishTask(task, target)
         }
+    }
 
+    private fun File.lengthOrZero(): Long = if (exists()) length() else 0L
+
+    private fun finishTask(task: DownloadTask, target: File) {
+        task.total = target.length()
+        task.downloaded = task.total
         task.error = null
         task.status = DownloadStatus.Complete
         persist()
-        Log.i(TAG, "download ${task.key} complete: ${task.file.length()} bytes")
+        scanIntoMediaStore(target)
+        Log.i(TAG, "download ${task.key} complete and verified: ${target.length()} bytes (${task.detail})")
+    }
+
+    private fun moveInto(work: File, target: File) {
+        target.delete()
+        if (!work.renameTo(target)) {
+            work.copyTo(target, overwrite = true)
+            work.delete()
+        }
+        metaFile(work).delete()
+    }
+
+    /**
+     * Keeps a partial file only if it can genuinely be continued; otherwise deletes it so the
+     * transfer restarts from byte 0. Records which stream the partial file belongs to.
+     */
+    private fun preparePartial(work: File, remote: Remote, itag: Int) {
+        val meta = metaFile(work)
+        val identity = DownloadFormats.streamIdentity(itag, remote.total)
+        val saved = runCatching { if (meta.exists()) meta.readText().trim() else null }.getOrNull()
+        val partial = work.lengthOrZero()
+        if (partial > 0L) {
+            if (DownloadFormats.canResume(partial, saved, identity, remote.ranges, remote.total)) {
+                Log.i(TAG, "resuming ${work.name} at $partial of ${remote.total} bytes")
+            } else {
+                Log.i(TAG, "restarting ${work.name}: partial data cannot be continued (ranges=${remote.ranges})")
+                work.delete()
+            }
+        }
+        runCatching { meta.writeText(identity) }
+    }
+
+    /**
+     * Picks the folder for a download. The chosen folder is used when it is writable; otherwise
+     * (no storage permission on Android 9 and older, a folder scoped storage does not allow,
+     * removed SD card) the app's own download folder is used, which never needs a permission.
+     */
+    private fun writableDirFor(task: DownloadTask): File {
+        val current = task.directory?.let(::File) ?: dir
+        if (isWritable(current)) {
+            if (task.directory == null) task.directory = current.absolutePath
+            return current
+        }
+        if (task.downloaded > 0L) deleteWork(task)
+        if (isWritable(fallbackDir)) {
+            Log.w(TAG, "${current.absolutePath} is not writable; saving ${task.key} to ${fallbackDir.absolutePath}")
+            task.directory = fallbackDir.absolutePath
+            task.downloaded = 0L
+            persist()
+            return fallbackDir
+        }
+        throw IOException("Storage is not available for downloads")
+    }
+
+    private fun isWritable(folder: File): Boolean = runCatching {
+        folder.mkdirs()
+        val probe = File(folder, ".ytxtube_probe.part")
+        probe.writeText("")
+        probe.delete()
+        true
+    }.getOrDefault(false)
+
+    /**
+     * Confirms the finished file is real media before calling it complete: it must open, and
+     * contain the expected audio (and video) tracks.
+     */
+    private fun verifyMediaFile(file: File, needVideo: Boolean, needAudio: Boolean) {
+        if (!file.exists() || file.length() <= 0L) throw DamagedFileException("The downloaded file is missing")
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(file.absolutePath)
+            var hasVideo = false
+            var hasAudio = false
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(AndroidMediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("video/")) hasVideo = true
+                if (mime.startsWith("audio/")) hasAudio = true
+            }
+            if ((needVideo && !hasVideo) || (needAudio && !hasAudio)) {
+                throw DamagedFileException("The downloaded file is missing its ${if (needVideo && !hasVideo) "video" else "audio"} track")
+            }
+        } catch (e: DamagedFileException) {
+            file.delete()
+            throw e
+        } catch (t: Throwable) {
+            file.delete()
+            throw DamagedFileException("The downloaded file could not be read", t)
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
+
+    /** Makes finished files show up in gallery and music apps (files written via File are not indexed). */
+    private fun scanIntoMediaStore(file: File) {
+        if (!::appContext.isInitialized) return
+        if (file.absolutePath.startsWith(fallbackDir.absolutePath)) return
+        runCatching { android.media.MediaScannerConnection.scanFile(appContext, arrayOf(file.absolutePath), null, null) }
+    }
+
+    private fun friendlyError(t: Throwable): String = when {
+        t is HttpStatusException && (t.code == 403 || t.code == 410) -> "YouTube refused the download (HTTP ${t.code}). Tap Retry."
+        t is HttpStatusException -> "Server error (HTTP ${t.code}). Tap Retry."
+        t is java.net.UnknownHostException || t is java.net.SocketTimeoutException || t is java.net.ConnectException ->
+            "No connection. Tap Retry when you're back online."
+        t.cause is java.net.UnknownHostException || t.cause is java.net.SocketTimeoutException ->
+            "Connection lost. Tap Retry when you're back online."
+        else -> t.message ?: "Download failed"
     }
 
     private fun report(task: DownloadTask, done: Long) {
@@ -601,6 +877,11 @@ object Downloads {
         var attempts = 0
         val maxAttempts = 5
         val buffer = ByteArray(128 * 1024)
+        val ctx = currentCoroutineContext()
+        // YouTube throttles one long request to roughly playback speed (a 38 MB audio file took
+        // as long as the audio itself), but serves each request of up to ~10 MB at full speed.
+        // So the file is fetched as consecutive byte ranges, like NewPipe and yt-dlp do.
+        var chunked = remote.ranges && remote.total > 0
 
         while (remote.total <= 0 || downloaded < remote.total) {
             try {
@@ -609,9 +890,13 @@ object Downloads {
                     .header("User-Agent", Net.USER_AGENT)
                     .header("Referer", "https://www.youtube.com/")
 
-                if (downloaded > 0) {
+                val chunkEnd = if (chunked) DownloadFormats.chunkEnd(downloaded, remote.total, DownloadFormats.CHUNK_BYTES) else null
+                if (chunkEnd != null) {
+                    reqBuilder.header("Range", "bytes=$downloaded-$chunkEnd")
+                } else if (downloaded > 0) {
                     reqBuilder.header("Range", "bytes=$downloaded-")
                 }
+                val before = downloaded
 
                 Net.client.newCall(reqBuilder.build()).execute().use { response ->
                     if (response.code != 200 && response.code != 206) {
@@ -619,6 +904,18 @@ object Downloads {
                     }
                     val body = response.body ?: throw IOException("Empty response body")
                     val isPartial = response.code == 206
+                    if (isPartial) {
+                        // The server must answer with the range that was asked for.
+                        val start = response.header("Content-Range")
+                            ?.substringAfter("bytes ", "")?.substringBefore('-')?.trim()?.toLongOrNull()
+                        if (start != null && start != downloaded) {
+                            throw IOException("Server sent bytes from $start instead of $downloaded")
+                        }
+                    } else if (chunked) {
+                        // Range ignored: take the whole file in this one response instead.
+                        Log.i(TAG, "server ignored the range request; downloading in one piece")
+                        chunked = false
+                    }
                     val source = body.source()
 
                     RandomAccessFile(file, "rw").use { raf ->
@@ -631,6 +928,9 @@ object Downloads {
                         }
 
                         while (true) {
+                            // The read loop is blocking, so check for Pause/Delete here;
+                            // otherwise a cancelled download kept writing until it finished.
+                            ctx.ensureActive()
                             val read = source.read(buffer)
                             if (read <= 0) break
                             raf.write(buffer, 0, read)
@@ -644,6 +944,7 @@ object Downloads {
                 if (remote.total <= 0 || downloaded >= remote.total) {
                     break
                 }
+                if (downloaded == before) throw IOException("The server sent no data")
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -673,7 +974,7 @@ object Downloads {
 
 
 
-    private fun mux(video: File, audio: File, out: File, container: String) {
+    private fun mux(video: File, audio: File, out: File, container: String, checkCancelled: () -> Unit) {
         if (container == "webm" && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             throw IOException("WebM downloads need Android 10 or newer")
         }
@@ -714,7 +1015,7 @@ object Downloads {
             var lastVTime = -1L
             var lastATime = -1L
             while (vSize >= 0 || aSize >= 0) {
-                if (Thread.interrupted()) throw CancellationException("Muxing cancelled")
+                checkCancelled()
                 val vTime = if (vSize >= 0) videoEx.sampleTime else Long.MAX_VALUE
                 val aTime = if (aSize >= 0) audioEx.sampleTime else Long.MAX_VALUE
                 if (vTime <= aTime) {
@@ -735,6 +1036,9 @@ object Downloads {
             }
 
             m.stop()
+        } catch (e: CancellationException) {
+            out.delete()
+            throw e
         } catch (t: Throwable) {
             out.delete()
             throw IOException("Could not combine video and audio", t)
@@ -755,25 +1059,19 @@ object Downloads {
 
 
 
-    private fun fileNameFor(video: VideoItem, height: Int, container: String = "mp4", hdr: Boolean = false): String {
-        val safe = video.title
-            .replace(Regex("[\\\\/:*?\"<>|\\n\\r\\t]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-            .take(64)
-            .ifBlank { video.id }
-        if (height == 0) return "$safe [Audio] ${video.id}.m4a"
-        val hdrTag = if (hdr) " HDR" else ""
-        val extension = if (container == "webm") "webm" else "mp4"
-        return "$safe [${height}p$hdrTag] ${video.id}.$extension"
+    private fun workFile(task: DownloadTask, kind: String): File {
+        val variant = if (task.audioItag > 0) "a${task.audioItag}" else task.height.toString()
+        return File(task.directory?.let(::File) ?: dir, "${task.videoId}_${variant}_$kind.part")
     }
 
-    private fun workFile(task: DownloadTask, kind: String): File =
-        File(dir, "${task.videoId}_${task.height}_$kind.part")
+    /** Sidecar recording which stream a partial file belongs to, so resuming never mixes streams. */
+    private fun metaFile(work: File): File = File(work.parentFile, work.name + ".meta")
 
     private fun deleteWork(task: DownloadTask) {
-        workFile(task, "video").delete()
-        workFile(task, "audio").delete()
+        listOf(workFile(task, "video"), workFile(task, "audio")).forEach { work ->
+            work.delete()
+            metaFile(work).delete()
+        }
     }
 
     private fun persist() {
@@ -794,7 +1092,10 @@ object Downloads {
                         .put("hdr", task.hdr)
                         .put("downloaded", task.downloaded)
                         .put("total", task.total)
-                        .put("status", task.status.name),
+                        .put("status", task.status.name)
+                        .put("dir", task.directory)
+                        .put("detail", task.detail)
+                        .put("aitag", task.audioItag),
                 )
             }
             prefs.edit().putString(PERSIST_KEY, array.toString()).apply()
@@ -828,7 +1129,14 @@ object Downloads {
                     hdr = json.optBoolean("hdr", name.contains(" HDR]")),
                     downloaded = json.optLong("downloaded"),
                     total = json.optLong("total", -1L),
-                    status = if (status == DownloadStatus.Complete) status else DownloadStatus.Paused,
+                    status = when (status) {
+                        DownloadStatus.Complete, DownloadStatus.Failed -> status
+                        // Interrupted by the app being closed: offer Resume, keeping partial data.
+                        else -> DownloadStatus.Paused
+                    },
+                    directory = json.optString("dir").takeIf { it.isNotBlank() && it != "null" },
+                    detail = json.optString("detail").takeIf { it != "null" }.orEmpty(),
+                    audioItag = json.optInt("aitag", 0),
                 )
                 if (status == DownloadStatus.Complete && !task.file.exists()) continue
                 if (tasks.any { it.fileName == name }) continue
@@ -843,12 +1151,12 @@ object Downloads {
             dir.listFiles()?.forEach { f ->
                 if (!f.isFile || f.length() <= 0L) return@forEach
                 val name = f.name
-                if (name.endsWith(".part") || name.startsWith(".")) return@forEach
+                if (name.endsWith(".part") || name.endsWith(".meta") || name.startsWith(".")) return@forEach
                 if (!existing.add(name)) return@forEach
-                val audio = name.endsWith(".m4a")
+                val audio = name.endsWith(".m4a") || name.contains(" [Audio")
                 val ext = when {
-                    audio -> ".m4a"
                     name.endsWith(".webm") -> ".webm"
+                    audio -> ".m4a"
                     else -> ".mp4"
                 }
                 if (!name.endsWith(ext)) return@forEach
@@ -890,6 +1198,9 @@ object Downloads {
     }
 
     private class HttpStatusException(val code: Int) : IOException("HTTP $code")
+
+    /** The transfer finished but the file is not valid media; retrying must start from scratch. */
+    private class DamagedFileException(message: String, cause: Throwable? = null) : IOException(message, cause)
 }
 
 

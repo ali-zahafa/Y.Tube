@@ -217,7 +217,7 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Rounded.DataUsage,
                         title = I18n.t("storage_usage", "Storage Usage"),
-                        subtitle = I18n.t("storage_sub", "See phone storage & clear YTXTube cache"),
+                        subtitle = I18n.t("storage_sub", "See phone storage & clear Y.tube cache"),
                         onClick = { activeFloatingSection = SettingsFloatingSection.STORAGE_USAGE },
                     )
                 }
@@ -227,7 +227,7 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Rounded.Info,
                         title = I18n.t("version", "Version"),
-                        subtitle = "YTXTube ${BuildConfig.VERSION_NAME}",
+                        subtitle = "Y.tube ${BuildConfig.VERSION_NAME}",
                         trailing = {
                             Box(
                                 modifier = Modifier
@@ -277,25 +277,12 @@ fun SettingsScreen(
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         }
                     }
-                    val ytxRepo = "https://github.com/Koustubh12345/YTXTube"
+                    val ytxRepo = "https://github.com/ali-zahafa/YTXTube"
                     SettingsRow(
                         icon = Icons.Rounded.Code,
                         title = I18n.t("open_source", "Open Source"),
                         subtitle = I18n.t("open_source_sub", "View source code on GitHub"),
                         onClick = { openRepo(ytxRepo) },
-                    )
-                    val telegram = "https://t.me/getthefckoutofheree"
-                    val openTelegram: () -> Unit = {
-                        val app = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=getthefckoutofheree"))
-                        val web = Intent(Intent.ACTION_VIEW, Uri.parse(telegram))
-                        runCatching { context.startActivity(app) }
-                            .onFailure { runCatching { context.startActivity(web) } }
-                    }
-                    SettingsRow(
-                        icon = Icons.Rounded.Person,
-                        title = I18n.t("developer", "Developer"),
-                        subtitle = "@getthefckoutofheree",
-                        onClick = openTelegram,
                     )
                 }
             }
@@ -339,7 +326,7 @@ fun SettingsScreen(
                 SettingsFloatingSection.STORAGE_USAGE -> {
                     SettingsFloatingDialog(
                         title = I18n.t("storage_usage", "Storage Usage"),
-                        subtitle = I18n.t("storage_sub", "Device memory & YTXTube data"),
+                        subtitle = I18n.t("storage_sub", "Device memory & Y.tube data"),
                         onDismiss = { activeFloatingSection = null },
                     ) {
                         StorageUsageContent(context = context) {
@@ -1312,6 +1299,19 @@ private fun GeneralModificationContent(context: Context) {
         HorizontalDivider(color = c.onSurface.copy(alpha = 0.08f))
 
         SettingsSwitchRow(
+            title = I18n.t("background_playback", "Background playback"),
+            subtitle = if (BackgroundPlaybackSettings.enabled) {
+                I18n.t("background_playback_on_sub", "Keep playing audio when the app is minimized or the screen is locked")
+            } else {
+                I18n.t("background_playback_off_sub", "Playback pauses when you leave the app or lock the screen")
+            },
+            checked = BackgroundPlaybackSettings.enabled,
+            onCheckedChange = { BackgroundPlaybackSettings.set(it) },
+        )
+
+        HorizontalDivider(color = c.onSurface.copy(alpha = 0.08f))
+
+        SettingsSwitchRow(
             title = I18n.t("enable_pip", "Picture-in-Picture (PiP)"),
             subtitle = I18n.t("enable_pip_sub", "Allow video to keep playing in a floating window when leaving the app"),
             checked = PipSettings.enabled,
@@ -1662,7 +1662,7 @@ private fun StorageUsageContent(context: Context, onCacheCleared: () -> Unit) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = I18n.t("used_by_ytxtube", "Used by YTXTube"),
+                text = I18n.t("used_by_ytxtube", "Used by Y.tube"),
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 14.sp,
                 color = c.onSurface,
@@ -1740,7 +1740,7 @@ private fun StorageUsageContent(context: Context, onCacheCleared: () -> Unit) {
                 }
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = clearedNotice ?: I18n.t("clear_cache_downloads", "Clear YTXTube Cache & Downloads"),
+                    text = clearedNotice ?: I18n.t("clear_cache_downloads", "Clear Y.tube Cache & Downloads"),
                     color = Color(0xFFEF5350),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.5.sp,

@@ -48,6 +48,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Comment
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -116,6 +117,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -141,9 +143,31 @@ import kotlin.math.absoluteValue
 private class ShortsFeedState(
     private val scope: kotlinx.coroutines.CoroutineScope,
     private val seed: VideoItem? = null,
+    /** Opened from a channel: swipe through that channel's Shorts instead of the general feed. */
+    private val channel: ChannelState? = null,
 ) {
-    var videos by mutableStateOf(seed?.let { listOf(it) } ?: emptyList())
+    var videos by mutableStateOf(initialVideos())
         private set
+
+    private fun initialVideos(): List<VideoItem> {
+        val own = channel?.shorts.orEmpty()
+        if (own.isNotEmpty() && (seed == null || own.any { it.id == seed.id })) return own
+        return seed?.let { listOf(it) } ?: emptyList()
+    }
+
+    val fromChannel: Boolean get() = channel != null
+
+    /** Page the pager opens on: the tapped Short inside the channel's list. */
+    val startIndex: Int get() = seed?.let { s -> videos.indexOfFirst { it.id == s.id } }?.coerceAtLeast(0) ?: 0
+
+    /** Picks up Shorts the channel loaded since (it pages as the viewer swipes). */
+    fun syncFromChannel() {
+        val own = channel?.shorts ?: return
+        if (own.size <= videos.size) return
+        val known = videos.mapTo(HashSet()) { it.id }
+        val added = own.filter { known.add(it.id) }
+        if (added.isNotEmpty()) videos = videos + added
+    }
     var loading by mutableStateOf(false)
         private set
     var refreshing by mutableStateOf(false)
@@ -156,6 +180,12 @@ private class ShortsFeedState(
     private val seen = HashSet<String>()
 
     fun load(ctx: Context? = null) {
+        if (channel != null) {
+            // The channel's own list is already here; its next pages come from the channel.
+            loaded = true
+            if (channel.shorts.isEmpty()) channel.loadShorts()
+            return
+        }
         if (loading || loaded) return
         loading = true
         error = null
@@ -174,6 +204,7 @@ private class ShortsFeedState(
     }
 
     fun refresh(ctx: Context? = null) {
+        if (channel != null) { syncFromChannel(); return }
         if (refreshing || loading) return
         refreshing = true
         error = null
@@ -203,6 +234,11 @@ private class ShortsFeedState(
     }
 
     fun loadMore(ctx: Context? = null) {
+        if (channel != null) {
+            syncFromChannel()
+            channel.loadMoreShorts()
+            return
+        }
         if (loading) return
         loading = true
         scope.launch {
@@ -232,6 +268,10 @@ fun ShortsScreen(
     active: Boolean = true,
     onOpenChannel: (String) -> Unit = {},
     onCommentsOpenChange: (Boolean) -> Unit = {},
+    /** Hands the current Short to the main player as audio-only background playback. */
+    onPlayInBackground: ((item: VideoItem, positionMs: Long) -> Unit)? = null,
+    /** The channel the Short was opened from; swiping then stays within its Shorts. */
+    channel: ChannelState? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -262,10 +302,13 @@ fun ShortsScreen(
             }
         }
     }
-    val feed = remember(startItem?.id) { ShortsFeedState(scope, startItem) }
+    val feed = remember(startItem?.id, channel) { ShortsFeedState(scope, startItem, channel) }
     LaunchedEffect(feed) { feed.load(context) }
+    if (channel != null) {
+        LaunchedEffect(feed, channel.shorts.size) { feed.syncFromChannel() }
+    }
 
-    val pager = rememberPagerState(pageCount = { feed.videos.size })
+    val pager = rememberPagerState(initialPage = feed.startIndex, pageCount = { feed.videos.size })
     val page = if (feed.videos.isEmpty()) 0 else pager.settledPage.coerceIn(0, feed.videos.lastIndex)
     val current = feed.videos.getOrNull(page)
 
@@ -289,6 +332,22 @@ fun ShortsScreen(
 
     val pip = LocalPictureInPicture.current
     val inPip = pip?.active == true
+
+    // Shorts play in their own ExoPlayer with no wake handling, so the screen timed out after a
+    // minute as if nothing was playing. Keep it on exactly while a Short is playing.
+    DisposableEffect(exo, view) {
+        val keepAwake = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                view.keepScreenOn = isPlaying
+            }
+        }
+        exo.addListener(keepAwake)
+        view.keepScreenOn = exo.isPlaying
+        onDispose {
+            exo.removeListener(keepAwake)
+            view.keepScreenOn = false
+        }
+    }
 
     DisposableEffect(exo) {
         (context as? MainActivity)?.shortsPlayerHolder = exo
@@ -827,6 +886,13 @@ fun ShortsScreen(
                                 }
                             },
                             onShare = { share(item) },
+                            onBackground = onPlayInBackground?.let { handOff ->
+                                {
+                                    val position = exo.currentPosition
+                                    exo.pause()
+                                    handOff(item, position)
+                                }
+                            },
                             onComments = {
                                 pauseForOverlay()
                                 comments.load(item.id)
@@ -1099,6 +1165,7 @@ private fun ShortsRail(
     onDownload: () -> Unit,
     backdrop: Backdrop,
     glass: GlassSpec,
+    onBackground: (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier,
@@ -1126,6 +1193,15 @@ private fun ShortsRail(
         ShortsAction(Icons.Rounded.Comment, I18n.t("comments", "Comments"), backdrop = backdrop, glass = glass, onClick = onComments)
         ShortsAction(Icons.Rounded.Download, I18n.t("download", "Download"), backdrop = backdrop, glass = glass, onClick = onDownload)
         ShortsAction(Icons.Rounded.Share, I18n.t("share", "Share"), backdrop = backdrop, glass = glass, onClick = onShare)
+        if (onBackground != null) {
+            ShortsAction(
+                Icons.Rounded.Headphones,
+                I18n.t("background_short", "Background"),
+                backdrop = backdrop,
+                glass = glass,
+                onClick = onBackground,
+            )
+        }
     }
 }
 
@@ -1345,12 +1421,20 @@ private class ShortsPreloader(context: Context) {
     )
         .setLoadControl(loadControl)
         .setBandwidthMeter(PlaybackBandwidth.get())
+        // The preload manager hands its renderers factory to the player it builds, so decoder
+        // fallback (try the next decoder if the hardware one fails to start) is set here.
+        .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
         .setDataSourceFactory(MediaCache.dataSourceFactory(context))
 
     private val manager = builder.build()
 
     val player: ExoPlayer = builder.buildExoPlayer(
-        ExoPlayer.Builder(context).setBandwidthMeter(PlaybackBandwidth.get()),
+        ExoPlayer.Builder(context)
+            .setBandwidthMeter(PlaybackBandwidth.get())
+            // Shorts used to ignore audio focus entirely, so they kept talking over phone
+            // calls and played on top of the main player. Let Media3 manage focus here too.
+            .setAudioAttributes(MediaAudio.attributes, true)
+            .setHandleAudioBecomingNoisy(true),
     ).apply {
         videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
         repeatMode = Player.REPEAT_MODE_ONE

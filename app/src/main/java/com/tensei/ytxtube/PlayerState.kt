@@ -161,13 +161,29 @@ class PlayerState(private val scope: CoroutineScope) {
 
 
 
-    val stageAspect: Float get() = if (AudioOnly.enabled) AudioStageAspect else {
+    /**
+     * Video id for which "Play in background" is on (audio only, keeps playing when the app is
+     * left). Session-only: never saved, and dropped when another video is opened.
+     */
+    var backgroundAudioFor by mutableStateOf<String?>(null)
+        private set
+
+    val backgroundAudioActive: Boolean get() = backgroundAudioFor != null && backgroundAudioFor == current?.id
+
+    /** Audio-only presentation: the saved Audio only mode or "Play in background" for this video. */
+    val audioOnlyActive: Boolean get() = AudioOnly.enabled || backgroundAudioActive
+
+    val stageAspect: Float get() = if (audioOnlyActive) AudioStageAspect else {
         min(videoAspect.coerceIn(StageMinAspect, StageMaxAspect), StageFrameAspect)
     }
     var firstFrameRendered by mutableStateOf(false)
         private set
 
     var playingFormat by mutableStateOf<String?>(null)
+        private set
+
+    /** Audio format actually being decoded, e.g. "AAC · 129 kbps"; null until tracks are known. */
+    var playingAudioFormat by mutableStateOf<String?>(null)
         private set
 
     var decodedHeight by mutableStateOf<Int?>(null)
@@ -281,16 +297,21 @@ class PlayerState(private val scope: CoroutineScope) {
         endHoldSpeed()
         openedAt = android.os.SystemClock.elapsedRealtime()
         Log.i("YTXTubeTime", "open ${item.id}")
+        // "Play in background" belongs to one video only.
+        if (backgroundAudioFor != null && backgroundAudioFor != item.id) clearBackgroundAudio()
         if (startPlayback) Net.prewarmMediaConnection()
         current = item
         if (isMusicMode) RecentMusic.record(item)
         details = null
         error = null
+        errorFromPlayback = false
         firstFrameRendered = false
         videoAspect = 16f / 9f
         aspectFromFrames = false
         decodedHeight = null
         playingFormat = null
+        playingAudioFormat = null
+        clearLiveQuality()
         loading = true
         sheet = null
         comments.clearFor(item.id)
@@ -391,7 +412,9 @@ class PlayerState(private val scope: CoroutineScope) {
     private fun startPlayback(item: VideoItem) {
         val player = controller ?: run { pendingStart = item; return }
 
-        replaceCurrent(player, item, positionMs = ResumeStore.startPosition(item.id))
+        val handOff = startAt?.takeIf { it.first == item.id }?.second
+        startAt = null
+        replaceCurrent(player, item, positionMs = handOff ?: ResumeStore.startPosition(item.id))
         player.play()
         if (selectedSubtitleLanguage != null) setSubtitleLanguage(selectedSubtitleLanguage)
         refreshTracks()
@@ -674,7 +697,10 @@ class PlayerState(private val scope: CoroutineScope) {
         // an HDR row falls back to a lower SDR height, leaving the player with no
         // video track at all.
         if (item.isLive) {
-            details = details?.copy(quality = height?.let { "${it}p" } ?: "Live")
+            // Live used to only relabel the quality while playback stayed on Auto. Now the
+            // chosen rendition of the HLS stream is actually pinned (or Auto restored).
+            val applied = applyLiveQuality(height)
+            details = details?.copy(quality = applied?.let { "${it}p" } ?: "Live")
             return
         }
 
@@ -687,6 +713,49 @@ class PlayerState(private val scope: CoroutineScope) {
         details = details?.copy(
             quality = picked.playedHeight?.let { "${it}p${if (picked.hdr) " HDR" else ""}" },
         )
+    }
+
+    /** Quality tiers the current live stream really offers, highest first; empty when not live. */
+    var liveQualities by mutableStateOf<List<Int>>(emptyList())
+        private set
+
+    /** A live video track is pinned through a track-selection override. */
+    private var liveOverride = false
+
+    private fun liveVideoTracks(): Pair<androidx.media3.common.Tracks.Group, List<Int>>? {
+        val group = controller?.currentTracks?.groups?.firstOrNull { it.type == C.TRACK_TYPE_VIDEO } ?: return null
+        val tiers = (0 until group.length).map { i ->
+            val f = group.getTrackFormat(i)
+            if (group.isTrackSupported(i) && f.height > 0) qualityTier(f.width, f.height) else 0
+        }
+        return group to tiers
+    }
+
+    /** Pins the live rendition closest to [height] (null = Auto). Returns the tier now pinned. */
+    private fun applyLiveQuality(height: Int?): Int? {
+        val player = controller ?: return null
+        val params = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        var pinned: Int? = null
+        if (height != null) {
+            liveVideoTracks()?.let { (group, tiers) ->
+                LiveQuality.pickTrack(tiers, height)?.let { index ->
+                    params.addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, index))
+                    pinned = tiers[index]
+                }
+            }
+        }
+        liveOverride = pinned != null
+        player.trackSelectionParameters = params.build()
+        return pinned
+    }
+
+    private fun clearLiveQuality() {
+        liveQualities = emptyList()
+        if (!liveOverride) return
+        liveOverride = false
+        controller?.let {
+            it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO).build()
+        }
     }
 
     /** Refresh the audio-track list from the resolved stream info. */
@@ -886,6 +955,51 @@ class PlayerState(private val scope: CoroutineScope) {
     fun toggleRememberSpeed() = PlaybackSpeed.setRemember(!PlaybackSpeed.remember, speed)
 
 
+    /**
+     * "Play in background" button: turns audio-only background playback on for the current video
+     * (video decoding stops, playback continues when the app is left or the screen locks), or
+     * back to normal video. Uses the existing session and track switching; saved settings are
+     * not touched and the app is not minimized.
+     */
+    fun toggleBackgroundAudio() {
+        val id = current?.id ?: return
+        if (backgroundAudioActive) {
+            clearBackgroundAudio()
+            actionMessage = "Back to video"
+        } else {
+            backgroundAudioFor = id
+            BackgroundAudioOverride.videoId = id
+            applyVideoTrack()
+            controller?.let { if (!it.playWhenReady) it.play() }
+            actionMessage = "Playing in background"
+        }
+    }
+
+    /**
+     * "Play in background" from Shorts: the Short continues in the main player (the one with the
+     * notification, lock-screen and headset controls) as audio only, from the same position.
+     * Same per-video, unsaved override as the button on the video screen.
+     */
+    fun playInBackground(item: VideoItem, positionMs: Long) {
+        backgroundAudioFor = item.id
+        BackgroundAudioOverride.videoId = item.id
+        startAt = item.id to positionMs
+        val alreadyOpen = current?.id == item.id && error == null
+        open(item, expand = false)
+        applyVideoTrack()
+        if (alreadyOpen) controller?.let { it.seekTo(positionMs); it.play() }
+    }
+
+    /** One-shot start position for [startPlayback] (Short handed off mid-way). */
+    private var startAt: Pair<String, Long>? = null
+
+    private fun clearBackgroundAudio() {
+        if (backgroundAudioFor == null && BackgroundAudioOverride.videoId == null) return
+        backgroundAudioFor = null
+        BackgroundAudioOverride.videoId = null
+        applyVideoTrack()
+    }
+
     fun setAudioOnly(on: Boolean) {
         AudioOnly.set(on)
         applyVideoTrack()
@@ -896,7 +1010,28 @@ class PlayerState(private val scope: CoroutineScope) {
 
 
 
-    fun setBackground(background: Boolean) {
+    fun setBackground(
+        background: Boolean,
+        changingConfigurations: Boolean = false,
+    ) {
+        if (background) {
+            val action = BackgroundPlaybackPolicy.onBackground(
+                backgroundEnabled = BackgroundPlaybackPolicy.effectiveEnabled(
+                    BackgroundPlaybackSettings.enabled,
+                    BackgroundAudioOverride.videoId,
+                    controller?.currentMediaItem?.mediaId,
+                ),
+                changingConfigurations = changingConfigurations,
+                hasMedia = (controller?.mediaItemCount ?: 0) > 0,
+            )
+            if (action == BackgroundPlaybackPolicy.OnBackground.None && changingConfigurations) return
+            if (action == BackgroundPlaybackPolicy.OnBackground.Pause) {
+                // Background playback is off: pause instead of continuing audio-only. This
+                // goes through the session, so the notification and lock screen stay in sync.
+                Log.i(TAG, "app left the foreground with background playback off; pausing")
+                controller?.pause()
+            }
+        }
         if (wantBackground == background) return
         wantBackground = background
         if (isMusicMode) return
@@ -911,6 +1046,9 @@ class PlayerState(private val scope: CoroutineScope) {
 
     private var wantBackground = false
 
+    /** [error] came from the player (not from loading details), so recovery may clear it. */
+    private var errorFromPlayback = false
+
 
     private fun applyVideoTrack() {
         runCatching {
@@ -918,7 +1056,7 @@ class PlayerState(private val scope: CoroutineScope) {
             // made the decoder re-init, which is the audible dip heard when reopening the
             // app during background playback.
             if (isMusicMode) return
-            val off = AudioOnly.enabled || wantBackground
+            val off = AudioOnly.enabled || backgroundAudioActive || wantBackground
             val player = controller ?: return
             if (player.trackSelectionParameters.disabledTrackTypes.contains(androidx.media3.common.C.TRACK_TYPE_VIDEO) == off) return
             Log.i(TAG, if (off) "video off (${if (AudioOnly.enabled) "audio only" else "background"})" else "video on")
@@ -929,6 +1067,7 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun close() {
+        clearBackgroundAudio()
         loadJob?.cancel()
         controller?.run { stop(); clearMediaItems() }
         queue = emptyList()
@@ -1000,6 +1139,11 @@ class PlayerState(private val scope: CoroutineScope) {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY && errorFromPlayback) {
+                // The service recovered by itself (network back, stream re-extracted).
+                errorFromPlayback = false
+                error = null
+            }
             if (playbackState == Player.STATE_ENDED) {
                 val p = controller ?: return
                 if (p.repeatMode == Player.REPEAT_MODE_ONE) return
@@ -1035,6 +1179,16 @@ class PlayerState(private val scope: CoroutineScope) {
         override fun onVideoSizeChanged(videoSize: VideoSize) = takeVideoSize(videoSize)
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+            playingAudioFormat = describeAudio(tracks)
+            if (current?.isLive == true) {
+                val offered = liveVideoTracks()?.second?.let(LiveQuality::offered).orEmpty()
+                if (offered != liveQualities) liveQualities = offered
+                // A saved quality applies to live too, once its renditions are known.
+                val saved = QualityPreference.height
+                if (saved != null && !liveOverride && offered.isNotEmpty()) {
+                    applyLiveQuality(saved)?.let { details = details?.copy(quality = "${it}p") }
+                }
+            }
             val vs = controller?.videoSize ?: return
             if (vs.width <= 0 || vs.height <= 0) return
             val w = (vs.width * vs.pixelWidthHeightRatio).roundToInt()
@@ -1051,13 +1205,30 @@ class PlayerState(private val scope: CoroutineScope) {
             Log.w(TAG, "playback error ${e.errorCodeName}${status?.let { " (HTTP $it)" } ?: ""} for ${current?.id}", e)
 
             if (e.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && StreamRecovery.recovering == current?.id) return
+            errorFromPlayback = true
             error = when (e.errorCode) {
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Lost the connection. Check your network and try again."
+                PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Lost the connection. Playback resumes when you're back online, or try again."
                 PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "YouTube refused the stream. Try again."
                 else -> "This video couldn't be played."
             }
         }
+    }
+
+    private fun describeAudio(tracks: androidx.media3.common.Tracks): String? {
+        val format = tracks.groups
+            .filter { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+            .firstNotNullOfOrNull { g -> (0 until g.length).firstOrNull { g.isTrackSelected(it) }?.let(g::getTrackFormat) }
+            ?: return null
+        val codec = DownloadFormats.audioCodecLabel(format.codecs)
+            ?: when (format.sampleMimeType) {
+                androidx.media3.common.MimeTypes.AUDIO_AAC -> "AAC"
+                androidx.media3.common.MimeTypes.AUDIO_OPUS -> "Opus"
+                else -> null
+            }
+        val bitrate = format.averageBitrate.takeIf { it > 0 } ?: format.bitrate.takeIf { it > 0 } ?: format.peakBitrate
+        val kbps = DownloadFormats.kbps(bitrate)
+        return listOfNotNull(codec, kbps.takeIf { it > 0 }?.let { "$it kbps" }).joinToString(" · ").ifBlank { null }
     }
 
     private fun takeVideoSize(videoSize: VideoSize) {

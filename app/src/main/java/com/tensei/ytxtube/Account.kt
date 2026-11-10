@@ -831,7 +831,7 @@ object InnerTube {
             val url = "https://lrclib.net/api/get?track_name=$encT&artist_name=$encA"
             val req = Request.Builder()
                 .url(url)
-                .header("User-Agent", "YTXTube/1.1 (https://github.com/Koustubh12345/YTXTube)")
+                .header("User-Agent", "Y.tube/1.1 (https://github.com/ali-zahafa/YTXTube)")
                 .build()
             Net.client.newCall(req).execute().use { r ->
                 if (r.isSuccessful) {
@@ -899,7 +899,7 @@ object InnerTube {
                 java.net.URLEncoder.encode("$cleanTitle $cleanArtist", "UTF-8")
             val searchReq = Request.Builder()
                 .url(searchUrl)
-                .header("User-Agent", "YTXTube/1.1 (https://github.com/Koustubh12345/YTXTube)")
+                .header("User-Agent", "Y.tube/1.1 (https://github.com/ali-zahafa/YTXTube)")
                 .build()
             Net.client.newCall(searchReq).execute().use { r ->
                 if (!r.isSuccessful) return@runCatching
@@ -1326,10 +1326,8 @@ object InnerTube {
                     }
                 }
             }
-            if (key == "continuationItemRenderer" || key == "continuationItemViewModel") {
-                obj.collectStrings("token").firstOrNull()?.let { next = it }
-            }
         }
+        feedContinuation(root)?.let { next = it }
         return FeedPage(out.values.toList(), next)
     }
 
@@ -1775,6 +1773,22 @@ object InnerTube {
     }
 
 
+    /**
+     * YouTube search with filters applied by YouTube ([params] from [SearchFilters]). Results
+     * include regular videos and Shorts (reel items), in YouTube's order.
+     */
+    suspend fun search(query: String, params: String?): FeedPage = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("query", query)
+        if (params != null) body.put("params", params)
+        val root = postAny("search", body)
+        val regular = parseFeed(root)
+        val shorts = parseShorts(root)
+        val merged = LinkedHashMap<String, VideoItem>()
+        regular.videos.forEach { merged.putIfAbsent(it.id, it) }
+        shorts.videos.forEach { merged.putIfAbsent(it.id, it) }
+        FeedPage(merged.values.toList(), regular.next ?: shorts.next)
+    }
+
     private const val CHANNEL_VIDEOS_TAB = "EgZ2aWRlb3PyBgQKAjoA"
     private const val CHANNEL_SHORTS_TAB = "EgZzaG9ydHPyBgUKA5oBAA%3D%3D"
     private const val CHANNEL_LIVE_TAB = "EgZzdHJlYW1z8gYECgJ6AA%3D%3D"
@@ -1979,12 +1993,53 @@ object InnerTube {
                 }
 
 
-                "continuationItemRenderer", "continuationItemViewModel" ->
-                    obj.collectStrings("token").firstOrNull()?.let { next = it }
             }
         }
+        next = feedContinuation(root)
         return FeedPage(videos.values.toList(), next)
     }
+
+    /**
+     * The "next page" token of a feed. Only continuation items in the page's content count:
+     * the channel header's About/description panels carry their own continuation items, and
+     * because the header follows the video grid in the response, taking the last token found
+     * anywhere replaced the grid's real next page with the About panel. Channels then stopped
+     * after their first page of Videos, Shorts or Live.
+     */
+    internal fun feedContinuation(root: JSONObject): String? {
+        val scopes = CONTINUATION_SCOPES.mapNotNull { root.opt(it) }.ifEmpty { listOf(root) }
+        var token: String? = null
+        fun visit(node: Any?) {
+            when (node) {
+                is JSONObject -> {
+                    val keys = node.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (key in NON_CONTENT_KEYS) continue
+                        val value = node.opt(key)
+                        if ((key == "continuationItemRenderer" || key == "continuationItemViewModel") && value is JSONObject) {
+                            value.collectStrings("token").firstOrNull()?.let { token = it }
+                        } else {
+                            visit(value)
+                        }
+                    }
+                }
+                is JSONArray -> for (i in 0 until node.length()) visit(node.opt(i))
+            }
+        }
+        scopes.forEach(::visit)
+        return token
+    }
+
+    private val CONTINUATION_SCOPES = listOf(
+        "contents", "continuationContents",
+        "onResponseReceivedActions", "onResponseReceivedCommands", "onResponseReceivedEndpoints",
+    )
+
+    /** Subtrees whose continuation items load panels, not the next page of the feed. */
+    private val NON_CONTENT_KEYS = setOf(
+        "header", "engagementPanels", "engagementPanel", "showEngagementPanelEndpoint", "frameworkUpdates",
+    )
 
 
     internal fun isMembersOnly(o: JSONObject): Boolean =
@@ -2096,10 +2151,9 @@ object InnerTube {
                         posts.add(CommunityPost(id, author.orEmpty(), avatar, text, image, published, likes))
                     }
                 }
-                "continuationItemRenderer", "continuationItemViewModel" ->
-                    obj.collectStrings("token").firstOrNull()?.let { next = it }
             }
         }
+        next = feedContinuation(root)
         return CommunityPage(posts, next)
     }
 
@@ -2171,7 +2225,9 @@ object InnerTube {
     internal fun parseViews(text: String?): Long {
         val t = text?.lowercase()?.replace(",", "")?.trim() ?: return -1
         if (t.startsWith("no ") || t.startsWith("कोई ") || t.startsWith("sin ")) return 0
-        if ("करोड़" in t || "cr" in t) {
+        // "cr"/"crore" only as a unit of its own: a bare `"cr" in t` also matched English
+        // "subscribers", turning "4.85M subscribers" into 48,500,000.
+        if ("करोड़" in t || CRORE_UNIT.containsMatchIn(t)) {
             val num = Regex("([\\d.]+)").find(t)?.groupValues?.get(1)?.toDoubleOrNull() ?: return -1
             return (num * 10_000_000).toLong()
         }
@@ -2258,6 +2314,8 @@ object InnerTube {
         style == "BADGE_STYLE_TYPE_VERIFIED" || style == "BADGE_STYLE_TYPE_VERIFIED_ARTIST"
 
     private val VERIFIED_CHANNEL_LABEL = Regex("verified|official artist", RegexOption.IGNORE_CASE)
+
+    private val CRORE_UNIT = Regex("(?<![a-z])cr(ore)?(?![a-z])")
     private val VIDEO_COUNT_IN_LINE = Regex("""[\d,.]+[kmb]?\s+videos\b""", RegexOption.IGNORE_CASE)
 }
 
