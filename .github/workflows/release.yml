@@ -1,8 +1,11 @@
+
 name: Build & Release
 
 on:
   push:
-    tags: [ 'v*', 'V*' ]
+    tags:
+      - 'v*'
+      - 'V*'
   workflow_dispatch:
 
 permissions:
@@ -11,32 +14,56 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           validate-wrappers: false
-      - run: chmod +x gradlew
-      - run: ./gradlew :app:testDebugUnitTest --tests "com.tensei.ytxtube.InnerTubeParseTest" --tests "com.tensei.ytxtube.BackgroundPlaybackPolicyTest" --stacktrace
-      - run: ./gradlew :app:assembleRelease --stacktrace
-      - run: |
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Run unit tests
+        run: |
+          ./gradlew :app:testDebugUnitTest \
+            --tests "com.tensei.ytxtube.InnerTubeParseTest" \
+            --tests "com.tensei.ytxtube.BackgroundPlaybackPolicyTest" \
+            --stacktrace
+
+      - name: Build Release APK
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Prepare APK files
+        run: |
           cp app/build/outputs/apk/release/app-release.apk Y.Tube.apk
           cp app/build/outputs/apk/release/app-release.apk YTXTube.apk
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: Y.Tube-Release-APK
           path: Y.Tube.apk
-      - id: release_title
+
+      - name: Prepare release title
+        id: release_title
         run: |
           TAG_NAME="${GITHUB_REF_NAME#v}"
           TAG_NAME="${TAG_NAME#V}"
           [ -z "$TAG_NAME" ] && TAG_NAME="2.4.0"
-          echo "title=Y.Tube v${TAG_NAME}" >> $GITHUB_OUTPUT
-      - if: startsWith(github.ref, 'refs/tags/')
+          echo "title=Y.Tube v${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_title.outputs.title }}
@@ -45,4 +72,4 @@ jobs:
             YTXTube.apk
           body: |
             • Fixed 40–60s stream cutoff ("YouTube refused the stream") by matching client User-Agent.
-            • Added Previous, Next, Rewind 10s, and Forward 1
+            • Added Previous, Next, Rewind 10s, and Forward 1.
