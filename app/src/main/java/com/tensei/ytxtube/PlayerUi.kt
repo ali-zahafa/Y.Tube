@@ -1257,7 +1257,7 @@ fun BitChordMusicPlayer(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        "YTX MUSIC",
+                        "Y.TUBE",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp,

@@ -1073,7 +1073,8 @@ fun channelAvatarEdgePx(url: String): Int =
 fun normalizeChannelAvatarUrl(url: String): String {
     if ("/ytc/" !in url || "googleusercontent.com" in url) return url
     val id = url.substringAfter("/ytc/").substringBefore("=").substringBefore("?").ifBlank { return url }
-    return "https://yt3.googleusercontent.com/ytc/$id=s88-c-k-c0x00ffffff-no-rj"
+    val size = Regex("=s(\\d+)").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 88
+    return "https://yt3.googleusercontent.com/ytc/$id=s$size-c-k-c0x00ffffff-no-rj"
 }
 
 
@@ -1081,7 +1082,7 @@ fun sharpenChannelAvatarUrl(url: String, minEdgePx: Int): String {
     val normalized = normalizeChannelAvatarUrl(url)
     val m = Regex("=s(\\d+)").find(normalized) ?: return normalized
     val current = m.groupValues[1].toIntOrNull() ?: return normalized
-    if ("/ytc/" in normalized && current > 96 && "googleusercontent.com" !in normalized) {
+    if ("/ytc/" in normalized && current > 96) {
         return normalized.replace(Regex("=s\\d+"), "=s96")
     }
     if (current >= minEdgePx) return normalized

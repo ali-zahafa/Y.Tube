@@ -538,7 +538,7 @@ private fun MusicScreenHeader(
         }
         Spacer(Modifier.width(10.dp))
         Text(
-            text = "YTX Music",
+            text = "Y.Tube",
             modifier = Modifier.weight(1f),
             fontFamily = RoundedHeavy,
             fontWeight = FontWeight.Bold,

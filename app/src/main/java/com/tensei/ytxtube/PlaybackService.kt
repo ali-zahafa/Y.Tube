@@ -8,62 +8,66 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import androidx.annotation.OptIn
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.dash.manifest.AdaptationSet
 import androidx.media3.exoplayer.dash.manifest.DashManifest
 import androidx.media3.exoplayer.dash.manifest.DashManifestParser
 import androidx.media3.exoplayer.dash.manifest.Period
-import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
-import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.exoplayer.source.SingleSampleMediaSource
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
-import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator
 import org.schabi.newpipe.extractor.stream.Stream
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.ByteArrayInputStream
 import java.util.concurrent.Executors
 
-
-
-
-
 private const val ACTION_CLOSE = "com.tensei.ytxtube.CLOSE"
+private const val ACTION_REWIND_10 = "com.tensei.ytxtube.REWIND_10"
+private const val ACTION_FORWARD_10 = "com.tensei.ytxtube.FORWARD_10"
+private const val ACTION_PREV = "com.tensei.ytxtube.PREV"
+private const val ACTION_NEXT = "com.tensei.ytxtube.NEXT"
+
 private val CLOSE_COMMAND = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
+private val REWIND_10_COMMAND = SessionCommand(ACTION_REWIND_10, Bundle.EMPTY)
+private val FORWARD_10_COMMAND = SessionCommand(ACTION_FORWARD_10, Bundle.EMPTY)
+private val PREV_COMMAND = SessionCommand(ACTION_PREV, Bundle.EMPTY)
+private val NEXT_COMMAND = SessionCommand(ACTION_NEXT, Bundle.EMPTY)
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -75,28 +79,20 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         val sources = YouTubeMediaSourceFactory(this)
-        // Decoder fallback: if the preferred (hardware) decoder fails to initialise, for example
-        // because another app holds it or the stream's profile is beyond it, try the next
-        // decoder instead of failing playback outright.
         val renderers = SyncedRenderersFactory(this).apply { setEnableDecoderFallback(true) }
         val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(sources)
             .setBandwidthMeter(PlaybackBandwidth.get())
-
-
             .setTrackSelector(
                 DefaultTrackSelector(
                     this,
                     AdaptiveTrackSelection.Factory(
- 2_000,
- 25_000,
- 25_000,
- 0.75f,
+                        2_000,
+                        25_000,
+                        25_000,
+                        0.75f,
                     ),
                 ).apply {
-
-
-
                     setParameters(
                         buildUponParameters()
                             .setAllowVideoMixedDecoderSupportAdaptiveness(true)
@@ -104,32 +100,16 @@ class PlaybackService : MediaSessionService() {
                     )
                 },
             )
-
-
             .setLoadControl(
                 DefaultLoadControl.Builder()
-                    // Start after a quarter second, keep a 30 s runway and a 10 s rewind
-                    // buffer. The old 15 s/50 s/1 s policy is what made every open sit on
-                    // a spinner before the first frame.
                     .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, 64 * 1024))
-                    // Resume after a stall only once 2 s are buffered: with 0.75 s a link that just
-                    // proved too slow played a fraction of a second and stalled again, over and
-                    // over. Startup stays at 0.25 s so first frames still appear immediately.
                     .setBufferDurationsMs(2_500, 30_000, 250, 2_000)
                     .setBackBuffer(10_000, false)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build(),
             )
-            // Media3 owns audio focus (handleAudioFocus = true): it requests focus when
-            // playback starts, pauses on AUDIOFOCUS_LOSS / LOSS_TRANSIENT (calls, voice
-            // assistants), ducks on LOSS_TRANSIENT_CAN_DUCK (navigation prompts), and on
-            // AUDIOFOCUS_GAIN resumes only if playback was paused by the focus loss, never
-            // after a user pause. No other focus manager may be added on top of this.
             .setAudioAttributes(MediaAudio.attributes, true)
-            // Headphones unplugged / Bluetooth audio disconnected (ACTION_AUDIO_BECOMING_NOISY).
             .setHandleAudioBecomingNoisy(true)
-
-
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
@@ -142,7 +122,6 @@ class PlaybackService : MediaSessionService() {
         player.setVideoFrameMetadataListener { _, releaseTimeNs, _, _ -> AvSync.onFrameReleased(releaseTimeNs) }
         sponsorSkipper = SponsorSkipper(player).also(player::addListener)
         player.addListener(SpeedKeeper(player))
-
 
         if (AudioOnly.enabled) {
             player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -162,13 +141,6 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
-    /**
-     * Keep the playback notification (and the foreground service behind it) while playback is
-     * merely paused. Media3 normally drops out of the foreground on pause; on many phones the
-     * system then kills the background app within a minute or two, taking the notification with
-     * it, so there was no way to resume from the notification. It now stays until playback ends,
-     * the queue is cleared, or the user taps the notification's close button.
-     */
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         val player = session.player
         val keepWhilePaused = BackgroundPlaybackPolicy.keepNotification(
@@ -179,7 +151,6 @@ class PlaybackService : MediaSessionService() {
         super.onUpdateNotification(session, startInForegroundRequired || keepWhilePaused)
     }
 
-    /** Notification close button: stop playback, remove the notification and leave the app. */
     private fun closeFromNotification() {
         Log.i("YTXTube", "closed from the notification")
         resumeSaver?.saveNow()
@@ -205,8 +176,6 @@ class PlaybackService : MediaSessionService() {
             ended = player.playbackState == Player.STATE_ENDED,
         )
         if (keep) {
-            // Background playback is on and the user was listening: the session stays in the
-            // foreground with its notification, exactly like being minimized.
             Log.i("YTXTube", "task removed while playing; background playback keeps the service")
             return
         }
@@ -233,24 +202,59 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
-    
-
-
-
-
     private inner class SessionCallback : MediaSession.Callback {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
-            if (!session.isMediaNotificationController(controller)) return super.onConnect(session, controller)
-            // The system notification / lock screen controller gets an extra close (✕) button.
+            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(PREV_COMMAND)
+                .add(REWIND_10_COMMAND)
+                .add(FORWARD_10_COMMAND)
+                .add(NEXT_COMMAND)
+                .add(CLOSE_COMMAND)
+                .build()
+            val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
+                .add(Player.COMMAND_SEEK_BACK)
+                .add(Player.COMMAND_SEEK_FORWARD)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .build()
+
+            if (!session.isMediaNotificationController(controller)) {
+                return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                    .setAvailableSessionCommands(sessionCommands)
+                    .setAvailablePlayerCommands(playerCommands)
+                    .build()
+            }
+
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(
-                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(CLOSE_COMMAND).build(),
-                )
+                .setAvailableSessionCommands(sessionCommands)
+                .setAvailablePlayerCommands(playerCommands)
                 .setMediaButtonPreferences(
                     ImmutableList.of(
+                        CommandButton.Builder(CommandButton.ICON_PREVIOUS)
+                            .setDisplayName("Previous")
+                            .setSessionCommand(PREV_COMMAND)
+                            .setSlots(CommandButton.SLOT_BACK)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_SKIP_BACK_10)
+                            .setDisplayName("Rewind 10s")
+                            .setSessionCommand(REWIND_10_COMMAND)
+                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD_10)
+                            .setDisplayName("Forward 10s")
+                            .setSessionCommand(FORWARD_10_COMMAND)
+                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_NEXT)
+                            .setDisplayName("Next")
+                            .setSessionCommand(NEXT_COMMAND)
+                            .setSlots(CommandButton.SLOT_FORWARD)
+                            .build(),
                         CommandButton.Builder(CommandButton.ICON_UNDEFINED)
                             .setDisplayName("Close")
                             .setCustomIconResId(R.drawable.ic_notification_close)
@@ -268,9 +272,35 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == ACTION_CLOSE) {
-                closeFromNotification()
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            val p = session.player
+            when (customCommand.customAction) {
+                ACTION_CLOSE -> {
+                    closeFromNotification()
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                ACTION_REWIND_10 -> {
+                    val target = (p.currentPosition - 10_000L).coerceAtLeast(0L)
+                    p.seekTo(target)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                ACTION_FORWARD_10 -> {
+                    val dur = p.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                    val target = (p.currentPosition + 10_000L).coerceAtMost(dur)
+                    p.seekTo(target)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                ACTION_PREV -> {
+                    NotificationQueueBridge.onSkipPrevious?.invoke() ?: run {
+                        if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem() else p.seekTo(0L)
+                    }
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                ACTION_NEXT -> {
+                    NotificationQueueBridge.onSkipNext?.invoke() ?: run {
+                        if (p.hasNextMediaItem()) p.seekToNextMediaItem()
+                    }
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
             }
             return super.onCustomCommand(session, controller, customCommand, args)
         }
@@ -284,7 +314,6 @@ class PlaybackService : MediaSessionService() {
                 val local = item.requestMetadata.mediaUri?.takeIf { it.scheme == "file" }
                     ?: item.mediaMetadata.extras?.getString("local_uri")?.let(Uri::parse)
                 if (local != null) {
-
                     item.buildUpon()
                         .setUri(local)
                         .setMediaMetadata(
@@ -311,8 +340,11 @@ class PlaybackService : MediaSessionService() {
     }
 }
 
+internal object NotificationQueueBridge {
+    @Volatile var onSkipPrevious: (() -> Unit)? = null
+    @Volatile var onSkipNext: (() -> Unit)? = null
+}
 
-/** Audio attributes shared by every player in the app so they negotiate focus with each other. */
 internal object MediaAudio {
     val attributes: AudioAttributes = AudioAttributes.Builder()
         .setUsage(C.USAGE_MEDIA)
@@ -321,21 +353,14 @@ internal object MediaAudio {
 }
 
 object StreamRecovery {
-
     var recovering by mutableStateOf<String?>(null)
         internal set
 
-
     var failed by mutableStateOf<Pair<String, String>?>(null)
         internal set
+
+    val forceProgressiveIds: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 }
-
-
-
-
-
-
-
 
 @OptIn(UnstableApi::class)
 private class StreamRecoverer(
@@ -345,22 +370,31 @@ private class StreamRecoverer(
 ) : Player.Listener {
     private val main = Handler(Looper.getMainLooper())
     private var lastId: String? = null
-    private var lastPositionMs = 0L
+    private var retryCount = 0
+
+    override fun onPlaybackStateChanged(playbackState: Int) {
+        if (playbackState == Player.STATE_READY) {
+            retryCount = 0
+        }
+    }
 
     override fun onPlayerError(error: PlaybackException) {
         if (error.errorCode != PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) return
         val item = player.currentMediaItem ?: return
-
         if (item.localConfiguration?.uri?.scheme == "file") return
         val id = item.mediaId
         val position = player.currentPosition
-        if (id == lastId && position < lastPositionMs + PROGRESS_MS) {
-            Log.w("YTXTube", "stream refused again for $id at ${position / 1000}s; giving up")
+        if (id != lastId) {
+            lastId = id
+            retryCount = 0
+        }
+        if (retryCount >= 3) {
+            Log.w("YTXTube", "stream refused after $retryCount attempts for $id at ${position / 1000}s; giving up")
             return
         }
-        lastId = id
-        lastPositionMs = position
-        Log.i("YTXTube", "stream refused for $id; re-extracting and resuming at ${position / 1000}s")
+        retryCount++
+        StreamRecovery.forceProgressiveIds.add(id)
+        Log.i("YTXTube", "stream refused for $id (attempt $retryCount); re-extracting and resuming at ${position / 1000}s")
         StreamRecovery.failed = null
         StreamRecovery.recovering = id
         StreamCache.invalidate(id)
@@ -368,7 +402,6 @@ private class StreamRecoverer(
             val result = runCatching { StreamCache.getOrLoad(id) }
             main.post {
                 StreamRecovery.recovering = null
-
                 if (player.currentMediaItem?.mediaId != id || player.playerError == null) return@post
                 result
                     .onSuccess { resume(item, position) }
@@ -380,10 +413,6 @@ private class StreamRecoverer(
         }
     }
 
-    
-
-
-
     private fun resume(item: MediaItem, positionMs: Long) {
         val index = player.currentMediaItemIndex
         player.addMediaSource(index + 1, sources.createMediaSource(item))
@@ -391,26 +420,8 @@ private class StreamRecoverer(
         player.seekTo(index, positionMs)
         player.prepare()
     }
-
-    private companion object {
-        const val PROGRESS_MS = 30_000L
-    }
 }
 
-
-
-
-
-
-
-
-
-/**
- * Resumes playback by itself after a dropped connection. Before this, a network error left
- * the player stuck on an error screen until the user pressed retry, which reopened the video
- * from scratch. Here the existing source is simply re-prepared (keeping the position and the
- * user's play/pause choice) after a short back-off, or as soon as a network becomes available.
- */
 @OptIn(UnstableApi::class)
 private class NetworkRecoverer(context: Context, private val player: ExoPlayer) : Player.Listener {
     private val main = Handler(Looper.getMainLooper())
@@ -423,8 +434,6 @@ private class NetworkRecoverer(context: Context, private val player: ExoPlayer) 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             main.post {
-                // Registering delivers the current network immediately; that is not a
-                // reconnection, so leave it to the timed back-off.
                 if (android.os.SystemClock.elapsedRealtime() - registeredAt < 1_000L) return@post
                 tryRecover(fromNetworkCallback = true)
             }
@@ -464,14 +473,10 @@ private class NetworkRecoverer(context: Context, private val player: ExoPlayer) 
         val error = player.playerError ?: return
         if (!NetworkRetryPolicy.isRecoverable(error.errorCode)) return
         if (player.currentMediaItem?.mediaId != failedId) return
-        if (!fromNetworkCallback && !isOnline()) {
-            // Still offline: the network callback will retry when a connection returns.
-            return
-        }
+        if (!fromNetworkCallback && !isOnline()) return
         if (!fromNetworkCallback) attempts++
         main.removeCallbacks(timedRetry)
         Log.i("YTXTube", "re-preparing $failedId after network error (${if (fromNetworkCallback) "network back" else "attempt $attempts"})")
-        // prepare() keeps the position and playWhenReady, so a video the user paused stays paused.
         player.prepare()
     }
 
@@ -522,7 +527,6 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         val id = mediaItem?.mediaId?.ifBlank { null }
-
         if (id == videoId) return
         finish()
         videoId = id
@@ -549,10 +553,8 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
     override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
         if (stretchFrom == null) return
         endStretch(oldPosition.positionMs)
-
         if (oldPosition.mediaItemIndex == newPosition.mediaItemIndex && player.isPlaying) stretchFrom = newPosition.positionMs
     }
-
 
     fun finish() {
         main.removeCallbacks(tick)
@@ -565,7 +567,6 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
         pings = 0
     }
 
-    /** Stops the ping timer and lets the final ping queued by [finish] drain before the thread ends. */
     fun release() {
         main.removeCallbacks(tick)
         io.shutdown()
@@ -597,7 +598,6 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
         schedule()
     }
 
-
     private fun send(playing: Boolean, final: Boolean) {
         val s = session ?: return
         if (starts.isEmpty() && !final) return
@@ -618,11 +618,6 @@ private class WatchTimeReporter(private val player: ExoPlayer) : Player.Listener
     }
 }
 
-
-
-
-
-
 private class SpeedKeeper(private val player: ExoPlayer) : Player.Listener {
     private var videoId: String? = null
 
@@ -633,14 +628,6 @@ private class SpeedKeeper(private val player: ExoPlayer) : Player.Listener {
         player.setPlaybackSpeed(PlaybackSpeed.forNewVideo)
     }
 }
-
-
-
-
-
-
-
-
 
 @OptIn(UnstableApi::class)
 private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
@@ -655,7 +642,6 @@ private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
             main.post {
                 if (released) return@post
                 SponsorBlock.forUi[id] = segments
-
                 if (player.currentMediaItem?.mediaId != id) return@post
                 val index = player.currentMediaItemIndex
                 segments.forEach { segment ->
@@ -678,7 +664,6 @@ private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
 
     private fun skip(videoId: String, segment: SponsorBlock.Segment) {
         if (released) return
-
         if (!SponsorBlock.enabled || segment.action != SponsorBlock.Action.Auto) return
         if (player.currentMediaItem?.mediaId != videoId) return
         if (player.currentPosition > segment.endMs - 500) return
@@ -704,18 +689,59 @@ private class SponsorSkipper(private val player: ExoPlayer) : Player.Listener {
     }
 }
 
+@OptIn(UnstableApi::class)
+internal object YouTubeStreamHttp {
+    private const val UA_IOS = "com.google.ios.youtube/21.10.3 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)"
+    private const val UA_ANDROID_VR = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
+    private const val UA_ANDROID = "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip"
+    private const val UA_TV = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15"
 
+    fun userAgentForUrl(url: String): String {
+        val clientParam = Regex("[?&]c=([^&]+)").find(url)?.groupValues?.getOrNull(1)?.uppercase().orEmpty()
+        return when {
+            clientParam.contains("IOS") -> UA_IOS
+            clientParam.contains("ANDROID_VR") -> UA_ANDROID_VR
+            clientParam.contains("ANDROID") -> UA_ANDROID
+            clientParam.contains("TVHTML5") -> UA_TV
+            else -> Net.USER_AGENT
+        }
+    }
 
+    fun createDataSourceFactory(context: Context): DataSource.Factory {
+        val dynamicOkHttpFactory = object : DataSource.Factory {
+            override fun createDataSource(): DataSource {
+                val base = OkHttpDataSource.Factory(Net.client)
+                    .setUserAgent(Net.USER_AGENT)
+                    .createDataSource()
+                return object : DataSource by base {
+                    override fun open(dataSpec: DataSpec): Long {
+                        val url = dataSpec.uri.toString()
+                        val ua = userAgentForUrl(url)
+                        val headers = HashMap(dataSpec.httpRequestHeaders)
+                        headers["User-Agent"] = ua
+                        if (ua == Net.USER_AGENT) {
+                            headers.putIfAbsent("Origin", "https://www.youtube.com")
+                            headers.putIfAbsent("Referer", "https://www.youtube.com/")
+                        }
+                        val updatedSpec = dataSpec.buildUpon()
+                            .setHttpRequestHeaders(headers)
+                            .build()
+                        return base.open(updatedSpec)
+                    }
 
-
-
+                    override fun addTransferListener(transferListener: TransferListener) {
+                        base.addTransferListener(transferListener)
+                    }
+                }
+            }
+        }
+        return DefaultDataSource.Factory(context, dynamicOkHttpFactory)
+    }
+}
 
 @OptIn(UnstableApi::class)
 private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory {
-    private val dataSourceFactory: DataSource.Factory = DefaultDataSource.Factory(
-        context,
-        OkHttpDataSource.Factory(Net.client).setUserAgent(Net.USER_AGENT),
-    )
+    private val dataSourceFactory: DataSource.Factory = YouTubeStreamHttp.createDataSourceFactory(context)
     private val fallback = DefaultMediaSourceFactory(dataSourceFactory)
 
     override fun setDrmSessionManagerProvider(provider: DrmSessionManagerProvider): MediaSource.Factory =
@@ -730,16 +756,14 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
         buildSource(mediaItem)
 
     private fun buildSource(mediaItem: MediaItem): MediaSource {
-
         if (mediaItem.localConfiguration?.uri?.scheme == "file") {
             return fallback.createMediaSource(mediaItem)
         }
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
-        // HLS is a live fallback only. A VOD HLS manifest carries just YouTube's default audio
-        // track, so using it for normal videos silently ignored both the picked language and the
-        // picked quality. VOD goes through the generated DASH/progressive path below.
+        val forceProgressive = mediaItem.mediaId in StreamRecovery.forceProgressiveIds
+
         if (isLive && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing live HLS stream from $hlsUrl")
             return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
@@ -752,7 +776,6 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
         }
         val picked = StreamSelection.pick(info)
 
-        // Nothing separable or muxed was extracted: HLS is still better than a black screen.
         if (picked.video == null && picked.muxed == null && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: no progressive streams, falling back to HLS")
             return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
@@ -764,45 +787,36 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
             )
         }
 
-        if (QualityPreference.height == null && picked.audio != null) {
+        if (!forceProgressive && QualityPreference.height == null && picked.audio != null) {
             val adaptive = adaptiveVideo(info, mediaItem)
             if (adaptive != null) {
                 Log.i("YTXTube", "media source ${mediaItem.mediaId}: adaptive video up to ${NetworkSpeed.linkHeight()}p + audio itag ${picked.audio.itag}")
-                return MergingMediaSource(true, true, adaptive, source(picked.audio, info.duration, mediaItem))
+                return MergingMediaSource(true, true, adaptive, source(picked.audio, info.duration, mediaItem, false))
             }
         }
-        Log.i(
-            "YTXTube",
-            "media source ${mediaItem.mediaId}: " + if (picked.usesSeparate) "video itag ${picked.video?.itag} (${picked.video?.height}p) + audio itag ${picked.audio?.itag}"
-            else "combined fallback itag ${picked.muxed?.itag} (${picked.muxed?.height}p); video=${picked.video != null} audio=${picked.audio != null}; " +
-                "audio offered: " + info.audioStreams.joinToString { "${it.itag}/${it.format}/${it.deliveryMethod}/url=${it.isUrl}/${it.audioTrackType}" },
-        )
         val video = picked.video
         val audio = picked.audio
         return when {
             video != null && audio != null -> MergingMediaSource(
- true,
- true,
-                source(video, info.duration, mediaItem),
-                source(audio, info.duration, mediaItem),
+                true,
+                true,
+                source(video, info.duration, mediaItem, forceProgressive),
+                source(audio, info.duration, mediaItem, forceProgressive),
             )
-            picked.muxed != null -> source(picked.muxed, info.duration, mediaItem)
-
-
+            picked.muxed != null -> source(picked.muxed, info.duration, mediaItem, forceProgressive)
+            !hlsUrl.isNullOrBlank() -> HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
+                MediaItem.Builder()
+                    .setUri(hlsUrl)
+                    .setMediaId(mediaItem.mediaId)
+                    .setMediaMetadata(mediaItem.mediaMetadata)
+                    .build(),
+            )
             else -> fallback.createMediaSource(mediaItem)
         }
     }
 
-    
-
-
-
-
     private fun adaptiveVideo(info: org.schabi.newpipe.extractor.stream.StreamInfo, mediaItem: MediaItem): MediaSource? {
         val durationSec = info.duration.takeIf { it > 0 } ?: return null
-        // Build the ladder up to what the link itself could carry and let ExoPlayer's
-        // bandwidth meter choose the starting rung. It starts conservatively and climbs
-        // as real throughput is measured, so fast connections still reach high quality.
         val maxTier = NetworkSpeed.linkHeight()
         val ladder = StreamSelection.autoLadder(info, maxTier)
         val manifests = ladder.mapNotNull { stream ->
@@ -822,10 +836,10 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
         return DashMediaSource.Factory(dataSourceFactory).createMediaSource(manifest, mediaItem)
     }
 
-    private fun source(stream: Stream, durationSec: Long, mediaItem: MediaItem): MediaSource {
+    private fun source(stream: Stream, durationSec: Long, mediaItem: MediaItem, forceProgressive: Boolean): MediaSource {
         val url = stream.content
         val itag = stream.itagItem
-        if (itag != null && durationSec > 0) {
+        if (!forceProgressive && itag != null && durationSec > 0) {
             val dash = runCatching {
                 val xml = YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(url, itag, durationSec)
                 val manifest = DashManifestParser().parse(Uri.parse(url), ByteArrayInputStream(xml.toByteArray()))

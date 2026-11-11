@@ -2095,8 +2095,8 @@ object InnerTube {
             thumbnail = videoThumbnailUrl(o, id),
             avatar = avatar?.let { sharpenChannelAvatarUrl(absoluteUrl(it), 96) },
             durationSec = if (isLive) 0L else parseDuration(duration),
-            views = parseViews(o.text("viewCountText") ?: o.text("shortViewCountText") ?: infoRuns.firstOrNull { it.contains("view") || it.contains("watching") }),
-            uploaded = if (isLive) I18n.t("live_now", "Live") else (o.text("publishedTimeText") ?: infoRuns.firstOrNull { it.contains("ago") || it.contains("पहले") || it.contains("hace") || it.contains("назад") } ?: infoRuns.lastOrNull())?.let { I18n.translateTimeAgo(it) },
+            views = parseViews(o.text("viewCountText") ?: o.text("shortViewCountText") ?: infoRuns.firstOrNull { it.contains("view") || it.contains("watching") || it.contains("مشاهد") }),
+            uploaded = if (isLive) I18n.t("live_now", "Live") else (o.text("publishedTimeText") ?: infoRuns.firstOrNull { it.contains("ago") || it.contains("قبل") || it.contains("منذ") || it.contains("पहले") || it.contains("hace") || it.contains("назад") } ?: infoRuns.lastOrNull())?.let { I18n.translateTimeAgo(it) },
             isLive = isLive,
         )
     }
@@ -2126,8 +2126,8 @@ object InnerTube {
             thumbnail = videoThumbnailUrl(o, id),
             avatar = avatar?.let { sharpenChannelAvatarUrl(absoluteUrl(it), 96) },
             durationSec = if (isLive) 0L else parseDuration(duration),
-            views = parseViews(parts.firstOrNull { it.contains("view") || it.contains("watching") }),
-            uploaded = if (isLive) I18n.t("live_now", "Live") else (parts.firstOrNull { it.contains("ago") || it.contains("पहले") || it.contains("hace") || it.contains("назад") } ?: parts.getOrNull(2))?.let { I18n.translateTimeAgo(it) },
+            views = parseViews(parts.firstOrNull { it.contains("view") || it.contains("watching") || it.contains("مشاهد") }),
+            uploaded = if (isLive) I18n.t("live_now", "Live") else (parts.firstOrNull { it.contains("ago") || it.contains("قبل") || it.contains("منذ") || it.contains("पहले") || it.contains("hace") || it.contains("назад") } ?: parts.getOrNull(2))?.let { I18n.translateTimeAgo(it) },
             isLive = isLive,
         )
     }
