@@ -1,10 +1,13 @@
-name: Build & Release
+Name: Build & Release
+
 on:
   push:
     tags: [ 'v*', 'V*' ]
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -42,11 +45,4 @@ jobs:
             YTXTube.apk
           body: |
             • Fixed 40–60s stream cutoff ("YouTube refused the stream") by matching client User-Agent.
-            • Added Previous, Next, Rewind 10s, and Forward 10s controls to the Android media notification.
-            • Unified visible branding across Music and headers to Y.Tube.
-            • Fixed channel videos and live streams freshness & Arabic upload date parsing.
-            • Added Previous & Next navigation controls to both the main video player and Shorts player.
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            • Added Previous, Next, Rewind 10s, and Forward 1
