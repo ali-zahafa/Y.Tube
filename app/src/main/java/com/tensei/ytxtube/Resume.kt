@@ -4,9 +4,11 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.OptIn
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 
 
 
@@ -87,6 +89,7 @@ class ResumeSaver(private val player: Player) : Player.Listener {
         if (isPlaying) handler.postDelayed(tick, 5_000) else saveNow()
     }
 
+    @OptIn(UnstableApi::class)
     override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
 
         val oldId = oldPosition.mediaItem?.mediaId

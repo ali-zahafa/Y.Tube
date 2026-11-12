@@ -1,7 +1,6 @@
 package com.tensei.ytxtube
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.res.Configuration
 import android.content.pm.PackageManager
@@ -10,6 +9,7 @@ import android.os.Bundle
 import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -249,7 +249,11 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         runCatching {
             @Suppress("DEPRECATION")
-            val disp = display ?: return
+            val disp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display ?: return
+            } else {
+                windowManager.defaultDisplay
+            }
             if (disp.hdrCapabilities?.supportedHdrTypes?.isNotEmpty() == true) {
                 window.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_HDR
             }
@@ -283,12 +287,14 @@ private val MiniGap = 8.dp
 
 @Composable
 fun YtxTubeApp() {
+    val activity = LocalActivity.current as? ComponentActivity ?: return
     val c = MaterialTheme.colorScheme
     val player = rememberPlayerState()
     val scope = rememberCoroutineScope()
     val search = remember { SearchState(scope) }
     val lib = remember { LibraryData(scope) }
     var signingIn by remember { mutableStateOf(false) }
+    var openHistory by rememberSaveable { mutableStateOf(false) }
     var openSettings by remember { mutableStateOf(false) }
     var openPlaylist by remember { mutableStateOf<PlaylistRef?>(null) }
     var openChannel by remember { mutableStateOf<String?>(null) }
@@ -358,13 +364,12 @@ fun YtxTubeApp() {
 
 
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
-    val lifecycleActivity = LocalContext.current as? Activity
-    DisposableEffect(lifecycle) {
+    DisposableEffect(lifecycle, activity) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
                 androidx.lifecycle.Lifecycle.Event.ON_STOP -> player.setBackground(
                     background = true,
-                    changingConfigurations = lifecycleActivity?.isChangingConfigurations == true,
+                    changingConfigurations = activity.isChangingConfigurations,
                 )
                 androidx.lifecycle.Lifecycle.Event.ON_START -> player.setBackground(false)
                 else -> Unit
@@ -395,13 +400,12 @@ fun YtxTubeApp() {
     )
 
 
-    val activity = LocalContext.current as Activity
     val mainActivity = activity as? MainActivity
     val orientation = rememberOrientationController(activity)
     val playerOpen = player.current != null && player.expanded
 
     orientation.Bind(playerOpen && !player.audioOnlyActive && !player.isMusicMode)
-    val pip = remember(activity) { PipController(activity as ComponentActivity) }
+    val pip = remember(activity) { PipController(activity) }
 
     SideEffect {
         mainActivity?.playerHolder = player
@@ -511,6 +515,7 @@ fun YtxTubeApp() {
     }
     BackHandler(enabled = !player.expanded && openSearch) { openSearch = false }
     BackHandler(enabled = !player.expanded && openPlaylist != null) { openPlaylist = null }
+    BackHandler(enabled = !player.expanded && openHistory) { openHistory = false }
     BackHandler(enabled = signingIn) { signingIn = false }
     BackHandler(enabled = !player.expanded && openChannel != null) { openChannel = null }
 
@@ -521,7 +526,7 @@ fun YtxTubeApp() {
     }
     BackHandler(enabled = updateState.visible) { updateState.dismiss() }
 
-    val canHandleRootBack = !player.expanded && !openSettings && !openAllSubscriptions &&
+    val canHandleRootBack = !player.expanded && !openHistory && !openSettings && !openAllSubscriptions &&
         tab == Tab.Home && openPlaylist == null && openChannel == null &&
         !openSearch && !signingIn && !showFullscreen && shortsEntry == null && !updateState.visible
     BackHandler(enabled = canHandleRootBack) {
@@ -678,6 +683,7 @@ fun YtxTubeApp() {
                         openChannel = url
                     },
                     onOpenAllSubscriptions = { openAllSubscriptions = true },
+                    onOpenHistory = { openHistory = true },
                     onSearch = { openSearch = true },
                     onSignIn = { signingIn = true }, onAccount = { openSettings = true },
                     scrollToTop = scrollToTop[Tab.Library] ?: 0,
@@ -790,11 +796,18 @@ fun YtxTubeApp() {
         }
 
 
+        if (openHistory) {
+            WatchHistoryScreen(
+                onBack = { openHistory = false },
+                onOpen = player::openFromHistory,
+            )
+        }
+
         BottomGestureGuard(Modifier.align(Alignment.BottomCenter))
 
         }
 
-        if (hasMini && !openSettings && tab != Tab.Shorts && shortsEntry == null) {
+        if (hasMini && !openHistory && !openSettings && tab != Tab.Shorts && shortsEntry == null) {
             val dismiss = remember { androidx.compose.animation.core.Animatable(0f) }
             LaunchedEffect(player.current?.id) { dismiss.snapTo(0f) }
             val dismissDistance = with(density) { 56.dp.toPx() }
@@ -889,7 +902,7 @@ fun YtxTubeApp() {
         }
 
 
-        val showBottomBar = !openSettings && shortsEntry == null && !pip.active && (tab != Tab.Shorts || !isShortsCommentsOpen)
+        val showBottomBar = !openHistory && !openSettings && shortsEntry == null && !pip.active && (tab != Tab.Shorts || !isShortsCommentsOpen)
         AnimatedVisibility(
             visible = showBottomBar,
             enter = slideInVertically(tween(260, easing = Motion.Emphasized)) { it } + fadeIn(tween(160)),

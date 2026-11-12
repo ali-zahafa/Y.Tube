@@ -155,7 +155,7 @@ class PipController(private val activity: ComponentActivity) {
 
 
     fun enter(videoAspect: Float): Boolean {
-        if (!supported) return false
+        if (!supported || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return false
 
         val ratio = videoAspect.coerceIn(0.42f, 2.38f)
         val params = PictureInPictureParams.Builder()

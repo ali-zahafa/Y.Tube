@@ -2,6 +2,7 @@ package com.tensei.ytxtube
 
 import android.content.ComponentName
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -18,6 +19,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaLibraryInfo
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
@@ -40,6 +43,7 @@ import kotlinx.coroutines.withContext
 
 
 @Stable
+@OptIn(UnstableApi::class)
 class PlayerState(private val scope: CoroutineScope) {
     var controller by mutableStateOf<MediaController?>(null)
         internal set
@@ -97,25 +101,24 @@ class PlayerState(private val scope: CoroutineScope) {
         actionMessage = if (shuffleEnabled) "Shuffle on" else "Shuffle off"
     }
 
-    fun skipNext() {
+    var canSkipPrevious by mutableStateOf(false)
+        private set
+    var canSkipNext by mutableStateOf(false)
+        private set
+    var canSeek by mutableStateOf(false)
+        private set
 
-        if (isMusicMode && musicQueue.isNotEmpty()) {
-            openMusicQueue(musicQueue, 0, expanded)
-            return
-        }
-        if (!isMusicMode && queue.isNotEmpty()) {
-            playFromQueue(0)
-        } else {
-            autoPlayNext()
+    fun skipNext() {
+        val player = controller ?: return
+        if (player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) {
+            player.seekToNextMediaItem()
         }
     }
 
     fun skipPrevious() {
         val player = controller ?: return
-        if (player.currentPosition > 3000) {
-            player.seekTo(0)
-        } else {
-            player.seekTo(0)
+        if (player.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)) {
+            player.seekToPreviousMediaItem()
         }
     }
 
@@ -258,6 +261,19 @@ class PlayerState(private val scope: CoroutineScope) {
         show(item, startPlayback = true)
     }
 
+    internal fun openFromHistory(entry: WatchEntry) {
+        val saved = entry.video
+        val localFile = saved.localUri?.toUri()?.path?.let { java.io.File(it) }
+        val item = if (localFile?.isFile == false) saved.copy(localUri = null) else saved
+        if (current?.id == item.id && error == null) {
+            expanded = true
+            play()
+            return
+        }
+        startAt = item.id to entry.resumePositionMs
+        open(item)
+    }
+
     fun openMusic(item: VideoItem, expand: Boolean = true) {
         openMusicQueue(listOf(item), 0, expand)
     }
@@ -272,7 +288,10 @@ class PlayerState(private val scope: CoroutineScope) {
         applyVideoTrack()
         musicQueue = items.drop(index + 1).filter { it.id != item.id }
         if (expand) expanded = true
-        if (current?.id == item.id && error == null) return
+        if (current?.id == item.id && error == null) {
+            publishUpNext(item.id)
+            return
+        }
         known[item.id] = item
         show(item, startPlayback = true)
     }
@@ -323,8 +342,8 @@ class PlayerState(private val scope: CoroutineScope) {
         speedPanelOpen = false
         videoZoom = 1f
         portraitFullscreen = false
+        loadJob?.cancel()
         if (item.localUri != null) {
-
             details = VideoDetails(
                 item = item,
                 description = "",
@@ -338,7 +357,7 @@ class PlayerState(private val scope: CoroutineScope) {
                 aspect = null,
             )
             loading = false
-            if (startPlayback) startPlayback(item)
+            if (startPlayback) startPlayback(item) else publishUpNext(item.id)
             return
         }
         if (Account.signedIn) {
@@ -348,10 +367,10 @@ class PlayerState(private val scope: CoroutineScope) {
                     .onFailure { Log.w(TAG, "account state for ${item.id}", it) }
             }
         }
-        loadJob?.cancel()
         loadJob = scope.launch {
             runCatching { YouTube.details(item.id) }
                 .onSuccess { d ->
+                    if (!isActive || current?.id != item.id) return@launch
                     Log.i("YTXTubeTime", "details +${android.os.SystemClock.elapsedRealtime() - openedAt}ms")
                     details = d
                     refreshTracks()
@@ -364,6 +383,7 @@ class PlayerState(private val scope: CoroutineScope) {
                     d.related.forEach { known[it.id] = it }
                     if (!d.playable) error = "No playable stream was found for this video."
                     else if (startPlayback) startPlayback(d.item)
+                    else publishUpNext(item.id)
 
                     scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                         val dislikes = fetchDislikeCount(item.id)
@@ -373,6 +393,7 @@ class PlayerState(private val scope: CoroutineScope) {
                     }
                 }
                 .onFailure {
+                    if (!isActive || current?.id != item.id) return@launch
                     Log.w(TAG, "details failed for ${item.id}", it)
                     error = YouTube.friendlyError(it)
 
@@ -388,11 +409,10 @@ class PlayerState(private val scope: CoroutineScope) {
             .setTitle(item.title)
             .setArtist(item.channel)
             .setArtworkUri(item.thumbnail?.toUri())
-            .apply {
-                if (localUri != null) {
-                    setExtras(android.os.Bundle().apply { putString("local_uri", localUri) })
-                }
-            }
+            .setExtras(android.os.Bundle().apply {
+                putBoolean(MEDIA_MUSIC_MODE, isMusicMode)
+                if (localUri != null) putString("local_uri", localUri)
+            })
             .build()
         return MediaItem.Builder()
             .setMediaId(item.id)
@@ -414,8 +434,7 @@ class PlayerState(private val scope: CoroutineScope) {
 
         val handOff = startAt?.takeIf { it.first == item.id }?.second
         startAt = null
-        replaceCurrent(player, item, positionMs = handOff ?: ResumeStore.startPosition(item.id))
-        player.play()
+        setCurrentMedia(player, item, handOff ?: ResumeStore.startPosition(item.id), play = true)
         if (selectedSubtitleLanguage != null) setSubtitleLanguage(selectedSubtitleLanguage)
         refreshTracks()
     }
@@ -425,25 +444,21 @@ class PlayerState(private val scope: CoroutineScope) {
 
 
 
-    private fun replaceCurrent(player: MediaController, item: VideoItem, positionMs: Long) {
-        if (player.mediaItemCount == 0) {
-            player.setMediaItem(mediaItemFor(item), positionMs)
-        } else {
-
-
-            swapping = true
-            try {
-                val index = player.currentMediaItemIndex
-                player.addMediaItem(index + 1, mediaItemFor(item))
-                player.seekTo(index + 1, positionMs)
-                player.removeMediaItem(index)
-            } finally {
-                swapping = false
-            }
-        }
-        player.prepare()
+    private fun setCurrentMedia(
+        player: MediaController,
+        item: VideoItem,
+        positionMs: Long,
+        replace: Boolean = false,
+        play: Boolean = false,
+    ) {
+        player.sendCustomCommand(START_VIDEO_COMMAND, android.os.Bundle().apply {
+            putBundle("item", mediaItemFor(item).toBundle(MediaLibraryInfo.INTERFACE_VERSION))
+            putLong("position", positionMs)
+            putBoolean("replace", replace)
+            putBoolean("play", play)
+            if (!replace) suggestedNext()?.let { putBundle("next", mediaItemFor(it).toBundle(MediaLibraryInfo.INTERFACE_VERSION)) }
+        })
     }
-
 
     fun playNext(item: VideoItem) {
         val player = controller ?: return
@@ -507,54 +522,59 @@ class PlayerState(private val scope: CoroutineScope) {
         uploaded = null,
     ).also { known[media.mediaId] = it }
 
-    private fun autoPlayNext() {
-        val curr = current ?: return
-        val currId = curr.id
+    private fun suggestedNext(): VideoItem? {
+        val curr = current ?: return null
+        if (isMusicMode) musicQueue.firstOrNull()?.let { return it }
+        val related = details?.related.orEmpty().filter { it.id != curr.id }
+        return if (isMusicMode) {
+            related.firstOrNull { isMusicTrack(it) } ?: related.firstOrNull()
+        } else {
+            related.firstOrNull { it.channel.equals(curr.channel, ignoreCase = true) } ?: related.firstOrNull()
+        }
+    }
 
-        if (isMusicMode && musicQueue.isNotEmpty()) {
+    private fun publishUpNext(id: String) {
+        controller?.sendCustomCommand(SET_UP_NEXT_COMMAND, android.os.Bundle().apply {
+            putString("current", id)
+            suggestedNext()?.let { putBundle("next", mediaItemFor(it).toBundle(MediaLibraryInfo.INTERFACE_VERSION)) }
+        })
+    }
+
+    private fun autoPlayNext() {
+        if (canSkipNext) {
             skipNext()
             return
         }
-        val relList = details?.related.orEmpty().filter { it.id != currId }
-
-        val next = if (isMusicMode) {
-            relList.firstOrNull { isMusicTrack(it) } ?: relList.firstOrNull()
-        } else {
-            relList.firstOrNull { it.channel.equals(curr.channel, ignoreCase = true) } ?: relList.firstOrNull()
-        }
+        val curr = current ?: return
+        val next = suggestedNext()
         if (next != null) {
             actionMessage = "Up next: ${next.title}"
             if (isMusicMode) openMusic(next, expand = expanded) else open(next, expand = expanded)
-        } else {
+        } else if (details == null) {
             scope.launch {
-                runCatching { YouTube.details(currId) }
-                    .onSuccess { d ->
-                        val list = d.related.filter { it.id != currId }
-                        val rel = if (isMusicMode) {
-                            list.firstOrNull { isMusicTrack(it) } ?: list.firstOrNull()
-                        } else {
-                            list.firstOrNull { it.channel.equals(curr.channel, ignoreCase = true) } ?: list.firstOrNull()
-                        }
-                        if (rel != null) {
-                            actionMessage = "Up next: ${rel.title}"
-                            if (isMusicMode) openMusic(rel, expand = expanded) else open(rel, expand = expanded)
-                        }
+                runCatching { YouTube.details(curr.id) }
+                    .onSuccess {
+                        if (!isActive || current?.id != curr.id) return@onSuccess
+                        details = it
+                        val related = suggestedNext() ?: return@onSuccess
+                        if (isMusicMode) openMusic(related, expand = expanded) else open(related, expand = expanded)
                     }
             }
         }
     }
 
-
-    private var swapping = false
-
     private fun onPlayerMovedTo(media: MediaItem) {
-        val player = controller ?: return
-        if (swapping || media.mediaId.isBlank()) return
-
-        if (player.currentMediaItemIndex > 0) player.removeMediaItems(0, player.currentMediaItemIndex)
-        if (media.mediaId != current?.id) show(itemFor(media), startPlayback = false)
+        if (media.mediaId.isBlank() || media.mediaId == current?.id) return
+        media.mediaMetadata.extras?.takeIf { it.containsKey(MEDIA_MUSIC_MODE) }?.let { extras ->
+            isMusicMode = extras.getBoolean(MEDIA_MUSIC_MODE)
+            applyVideoTrack()
+        }
+        if (isMusicMode) {
+            val consumed = musicQueue.indexOfFirst { it.id == media.mediaId }
+            if (consumed >= 0) musicQueue = musicQueue.drop(consumed + 1)
+        }
+        show(itemFor(media), startPlayback = false)
     }
-
 
     val segments: List<SponsorBlock.Segment>
         get() = current?.id?.let { SponsorBlock.forUi[it] }.orEmpty()
@@ -705,9 +725,7 @@ class PlayerState(private val scope: CoroutineScope) {
         }
 
         val position = player.currentPosition
-        val playWhenReady = player.playWhenReady
-        replaceCurrent(player, item, position)
-        player.playWhenReady = playWhenReady
+        setCurrentMedia(player, item, position, replace = true)
         val info = StreamCache.get(item.id) ?: return
         val picked = StreamSelection.pick(info)
         details = details?.copy(
@@ -795,9 +813,7 @@ class PlayerState(private val scope: CoroutineScope) {
         val player = controller ?: return
         val item = details?.item ?: current ?: return
         val position = player.currentPosition
-        val playWhenReady = player.playWhenReady
-        replaceCurrent(player, item, position)
-        player.playWhenReady = playWhenReady
+        setCurrentMedia(player, item, position, replace = true)
         actionMessage = "Audio: ${option?.label ?: "Original"}"
     }
 
@@ -870,16 +886,20 @@ class PlayerState(private val scope: CoroutineScope) {
 
     fun togglePlay() {
         val player = controller ?: return
-        if (player.isPlaying) player.pause() else {
-            if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
-            if (player.playbackState == Player.STATE_IDLE) player.prepare()
-            player.play()
-        }
+        if (player.playWhenReady && player.playbackState != Player.STATE_ENDED) player.pause()
+        else play()
     }
 
+    fun play() {
+        val player = controller ?: return
+        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        player.play()
+    }
 
     fun seekBy(deltaMs: Long): Long {
         val player = controller ?: return 0L
+        if (!player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)) return 0L
         val from = player.currentPosition
         seekTo(from + deltaMs)
         return positionMs - from
@@ -1096,6 +1116,7 @@ class PlayerState(private val scope: CoroutineScope) {
         val playing = player.currentMediaItem ?: return
         if (current != null || playing.mediaId.isBlank()) return
         val meta = playing.mediaMetadata
+        isMusicMode = meta.extras?.getBoolean(MEDIA_MUSIC_MODE) == true
         val item = VideoItem(
             id = playing.mediaId,
             title = meta.title?.toString().orEmpty(),
@@ -1109,13 +1130,22 @@ class PlayerState(private val scope: CoroutineScope) {
         )
         current = item
         loadJob = scope.launch {
-            runCatching { YouTube.details(item.id) }.onSuccess { details = it; current = it.item; refreshTracks() }
+            runCatching { YouTube.details(item.id) }.onSuccess {
+                if (!isActive || current?.id != item.id) return@onSuccess
+                details = it
+                current = it.item
+                refreshTracks()
+                publishUpNext(item.id)
+            }
         }
     }
 
     internal fun syncFromPlayer() {
         val player = controller ?: return
         isPlaying = player.isPlaying
+        canSeek = player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+        canSkipPrevious = player.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        canSkipNext = player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
 
         isBuffering = player.playbackState == Player.STATE_BUFFERING || StreamRecovery.recovering == current?.id
         positionMs = player.currentPosition.coerceAtLeast(0L)
@@ -1147,9 +1177,8 @@ class PlayerState(private val scope: CoroutineScope) {
             if (playbackState == Player.STATE_ENDED) {
                 val p = controller ?: return
                 if (p.repeatMode == Player.REPEAT_MODE_ONE) return
-                if (p.currentMediaItemIndex + 1 < p.mediaItemCount) {
-                    p.seekTo(p.currentMediaItemIndex + 1, 0L)
-                    p.play()
+                if (p.hasNextMediaItem()) {
+                    skipNext()
                 } else if (autoPlayEnabled) {
                     autoPlayNext()
                 }
@@ -1316,3 +1345,4 @@ fun rememberPlayerState(): PlayerState {
 enum class PlayerSheet { Quality, Comments, Queue, Settings, Speed, Audio, Subtitles }
 
 private const val TAG = "YTXTube"
+private const val MEDIA_MUSIC_MODE = "music_mode"

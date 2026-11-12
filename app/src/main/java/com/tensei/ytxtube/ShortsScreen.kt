@@ -75,6 +75,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -115,6 +116,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -259,6 +261,7 @@ private class ShortsFeedState(
 }
 
 @Composable
+@OptIn(UnstableApi::class)
 fun ShortsScreen(
     onBack: () -> Unit,
     onSignIn: () -> Unit,
@@ -323,8 +326,13 @@ fun ShortsScreen(
     // samples that are already buffered instead of rebuilding the source.
     val preload = remember { ShortsPreloader(context) }
     val exo = preload.player
-    DisposableEffect(Unit) {
+    val historyFeed by rememberUpdatedState(feed)
+    DisposableEffect(exo) {
+        val history = WatchHistoryTracker(exo) { media ->
+            historyFeed.videos.firstOrNull { it.id == media.mediaId }
+        }
         onDispose {
+            history.release()
             exo.release()
             preload.release()
         }
@@ -1339,6 +1347,7 @@ private fun countLabel(value: Long, fallback: String = "Like"): String = when {
 
 
 @Composable
+@OptIn(UnstableApi::class)
 private fun ShortsVideo(player: ExoPlayer, modifier: Modifier = Modifier) {
     var video by remember { mutableStateOf(VideoSize(0, 0)) }
     DisposableEffect(player) {

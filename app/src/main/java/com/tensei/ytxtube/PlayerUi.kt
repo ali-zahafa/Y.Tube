@@ -1443,6 +1443,7 @@ fun BitChordMusicPlayer(
 
                 IconButton(
                     onClick = state::skipPrevious,
+                    enabled = state.canSkipPrevious,
                     modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
@@ -1481,6 +1482,7 @@ fun BitChordMusicPlayer(
 
                 IconButton(
                     onClick = state::skipNext,
+                    enabled = state.canSkipNext,
                     modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
@@ -1903,7 +1905,7 @@ private fun androidx.compose.foundation.layout.BoxScope.BitChordMiniDetails(
         Box(
             Modifier
                 .size(38.dp)
-                .pressable(enabled = interactive, onClick = state::skipNext)
+                .pressable(enabled = interactive && state.canSkipNext, onClick = state::skipNext)
                 .then(glassCircle),
             contentAlignment = Alignment.Center,
         ) {

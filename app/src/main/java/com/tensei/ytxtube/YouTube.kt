@@ -1087,7 +1087,7 @@ fun sharpenChannelAvatarUrl(url: String, minEdgePx: Int): String {
     }
     if (current >= minEdgePx) return normalized
 
-    val ceiling = if ("/ytc/" in normalized && "googleusercontent.com" !in normalized) 96 else 800
+    val ceiling = if ("/ytc/" in normalized) 96 else 800
     val edge = minOf(minEdgePx, ceiling).coerceAtLeast(current)
     return normalized.replace(Regex("=s\\d+"), "=s$edge")
 }

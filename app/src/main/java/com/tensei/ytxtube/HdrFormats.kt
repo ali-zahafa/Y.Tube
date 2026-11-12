@@ -65,7 +65,7 @@ object HdrFormats {
 
     private val streamConstructor: java.lang.reflect.Constructor<*>? = runCatching {
         VideoStream::class.java.declaredConstructors
-            .firstOrNull { it.parameterCount == 9 }
+            .firstOrNull { it.parameterTypes.size == 9 }
             ?.apply { isAccessible = true }
     }.getOrNull()
 

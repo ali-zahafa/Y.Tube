@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [ main ]
   push:
-    branches: [ 'claude/**' ]
+    branches: [ 'claude/**', 'release/**' ]
   workflow_dispatch:
 
 permissions:
@@ -28,21 +28,16 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v3
         with:
-          validate-wrappers: false
-
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
+          cmdline-tools-version: '14742923'
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'build-tools;37.0.0'
+      - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
-      # The APK is built even when unit tests fail, so a known legacy test failure
-      # (InnerTubeParseTest.sharpenYtcChannelAvatar, failing since the initial commit)
-      # does not block testing on a device. The "Unit tests" step above still fails
-      # and still marks this job as failed; nothing about the test result is hidden.
       - name: Build debug APK
         if: ${{ !cancelled() }}
         run: ./gradlew :app:assembleDebug --stacktrace
