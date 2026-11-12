@@ -1021,14 +1021,14 @@ object Downloads {
                 if (vTime <= aTime) {
                     val pts = (vTime - base).coerceAtLeast(lastVTime + 1)
                     lastVTime = pts
-                    info.set(0, vSize, pts, videoEx.sampleFlags)
+                    info.set(0, vSize, pts, muxerSampleFlags(videoEx.sampleFlags))
                     m.writeSampleData(vOut, vBuffer, info)
                     videoEx.advance()
                     vSize = videoEx.readSampleData(vBuffer, 0)
                 } else {
                     val pts = (aTime - base).coerceAtLeast(lastATime + 1)
                     lastATime = pts
-                    info.set(0, aSize, pts, audioEx.sampleFlags)
+                    info.set(0, aSize, pts, muxerSampleFlags(audioEx.sampleFlags))
                     m.writeSampleData(aOut, aBuffer, info)
                     audioEx.advance()
                     aSize = audioEx.readSampleData(aBuffer, 0)
@@ -1046,6 +1046,18 @@ object Downloads {
             runCatching { muxer?.release() }
             runCatching { videoEx.release() }
             runCatching { audioEx.release() }
+        }
+    }
+
+    private fun muxerSampleFlags(extractorFlags: Int): Int {
+        val unsupported = MediaExtractor.SAMPLE_FLAG_ENCRYPTED or MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME
+        if ((extractorFlags and unsupported) != 0) {
+            throw IOException("Cannot mux an encrypted or incomplete media sample")
+        }
+        return if ((extractorFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
+            MediaCodec.BUFFER_FLAG_KEY_FRAME
+        } else {
+            0
         }
     }
 

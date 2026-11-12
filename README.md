@@ -2,7 +2,7 @@
 
 # Y.tube
 
-<img src="docs/icon.png" width="180" alt="Y.tube icon" />
+<img src="docs/icon.png" width="180" alt="Y.Tube blue play icon with a cyan orbit" />
 
 ### Free, open-source YouTube alternative for Android
 ### بديل يوتيوب مجاني ومفتوح المصدر لأندرويد

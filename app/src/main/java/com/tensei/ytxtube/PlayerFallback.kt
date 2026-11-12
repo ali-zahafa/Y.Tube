@@ -175,21 +175,25 @@ object PlayerFallback {
 
     private fun isPlayable(player: JSONObject): Boolean {
         val status = player.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
-        if (!status.equals("OK", ignoreCase = true)) return false
+        return status.equals("OK", ignoreCase = true) && hasPlayableStreams(player)
+    }
+
+    private fun hasPlayableStreams(player: JSONObject): Boolean {
         val streaming = player.optJSONObject("streamingData") ?: return false
-        if (streaming.optString("hlsManifestUrl").isNotBlank()) return true
+        if ((streaming.opt("hlsManifestUrl") as? String)?.isNotBlank() == true) return true
+        if ((streaming.opt("dashManifestUrl") as? String)?.isNotBlank() == true) return true
         if ((streaming.optJSONArray("formats")?.length() ?: 0) > 0) return true
         return (streaming.optJSONArray("adaptiveFormats")?.length() ?: 0) > 0
     }
 
-    private fun isBlocked(body: String): Boolean {
+    internal fun isBlocked(body: String): Boolean {
         val root = runCatching { JSONObject(body) }.getOrNull()
         if (root != null) {
             val player = root.optJSONObject("playerResponse") ?: root
             val status = player.optJSONObject("playabilityStatus")
             val code = status?.optString("status").orEmpty()
             val reason = status?.optString("reason").orEmpty().lowercase()
-            if (code.equals("OK", ignoreCase = true)) return false
+            if (code.equals("OK", ignoreCase = true)) return !hasPlayableStreams(player)
             if (code.equals("LOGIN_REQUIRED", true) ||
                 code.equals("UNPLAYABLE", true) ||
                 code.equals("ERROR", true) ||

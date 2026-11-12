@@ -586,6 +586,7 @@ fun LibraryScreen(
     onOpenPlaylist: (PlaylistRef) -> Unit,
     onOpenChannel: (String) -> Unit = {},
     onOpenAllSubscriptions: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
     onSearch: () -> Unit,
     onSignIn: () -> Unit,
     onAccount: () -> Unit,
@@ -610,6 +611,11 @@ fun LibraryScreen(
             topPadding = top,
         ) {
         LazyColumn(state = rememberScrollToTop(scrollToTop), contentPadding = contentPadding.withTop(top)) {
+            item(key = "localWatchHistory") {
+                Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    PillButton("Watch History", onOpenHistory)
+                }
+            }
             if (!signedIn) {
                 item {
                     EmptyState(

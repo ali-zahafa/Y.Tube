@@ -81,6 +81,7 @@ import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
@@ -254,19 +255,23 @@ fun VideoContent(
         if (!TvMode.isTv || !interactive || e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (e.key) {
             Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause -> {
-                state.togglePlay()
+                when (e.key) {
+                    Key.MediaPlay -> state.play()
+                    Key.MediaPause -> state.controller?.pause()
+                    else -> state.togglePlay()
+                }
                 controlsVisible = true
                 touched()
                 true
             }
             Key.MediaNext, Key.MediaFastForward -> {
-                state.seekBy(10_000)
+                if (e.key == Key.MediaNext) state.skipNext() else state.seekBy(10_000)
                 controlsVisible = true
                 touched()
                 true
             }
             Key.MediaPrevious, Key.MediaRewind -> {
-                state.seekBy(-10_000)
+                if (e.key == Key.MediaPrevious) state.skipPrevious() else state.seekBy(-10_000)
                 controlsVisible = true
                 touched()
                 true
@@ -619,11 +624,15 @@ fun VideoContent(
                 }
                 Row(
                     modifier = Modifier.align(Alignment.Center),
-                    horizontalArrangement = Arrangement.spacedBy(if (fullscreen) 52.dp else 26.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (fullscreenControlsScrub) 16.dp else 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val skip = if (fullscreen) 50.dp else 43.dp
-                    GlassButton(Icons.Rounded.Replay10, "Back 10 seconds", enabled, size = skip, iconSize = skip * 0.6f, backdrop = videoBackdrop) {
+                    val skip = if (fullscreenControlsScrub) 50.dp else 43.dp
+                    GlassButton(Icons.Rounded.SkipPrevious, "Previous video", enabled && state.canSkipPrevious, size = skip, iconSize = skip * 0.6f, backdrop = videoBackdrop) {
+                        touched()
+                        state.skipPrevious()
+                    }
+                    GlassButton(Icons.Rounded.Replay10, "Back 10 seconds", enabled && state.canSeek, size = skip, iconSize = skip * 0.6f, backdrop = videoBackdrop) {
                         touched(); state.seekBy(-10_000)
                     }
                     val playGlass = Modifier.liquidGlass(
@@ -647,8 +656,12 @@ fun VideoContent(
                         backdrop = playGlass,
                         glass = true,
                     ) { touched(); state.togglePlay() }
-                    GlassButton(Icons.Rounded.Forward10, "Forward 10 seconds", enabled, size = skip, iconSize = skip * 0.6f, backdrop = videoBackdrop) {
+                    GlassButton(Icons.Rounded.Forward10, "Forward 10 seconds", enabled && state.canSeek, size = skip, iconSize = skip * 0.6f, backdrop = videoBackdrop) {
                         touched(); state.seekBy(10_000)
+                    }
+                    GlassButton(Icons.Rounded.SkipNext, "Next video", enabled && state.canSkipNext, size = skip, iconSize = skip * 0.6f, backdrop = videoBackdrop) {
+                        touched()
+                        state.skipNext()
                     }
                 }
                 Column(
@@ -847,10 +860,11 @@ fun AudioOnlyStage(
         ) {
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(30.dp, Alignment.CenterHorizontally),
+                horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TonalSkip(Icons.Rounded.Replay10, "Back 10 seconds", interactive) { state.seekBy(-10_000) }
+                TonalSkip(Icons.Rounded.SkipPrevious, "Previous video", interactive && state.canSkipPrevious, state::skipPrevious)
+                TonalSkip(Icons.Rounded.Replay10, "Back 10 seconds", interactive && state.canSeek) { state.seekBy(-10_000) }
                 MorphPlayButton(
                     playing = state.isPlaying,
                     buffering = state.isBuffering || (state.loading && state.details == null),
@@ -859,7 +873,8 @@ fun AudioOnlyStage(
                     content = c.onPrimary,
                     enabled = interactive,
                 ) { state.togglePlay() }
-                TonalSkip(Icons.Rounded.Forward10, "Forward 10 seconds", interactive) { state.seekBy(10_000) }
+                TonalSkip(Icons.Rounded.Forward10, "Forward 10 seconds", interactive && state.canSeek) { state.seekBy(10_000) }
+                TonalSkip(Icons.Rounded.SkipNext, "Next video", interactive && state.canSkipNext, state::skipNext)
             }
             Spacer(Modifier.height(8.dp))
             var scrubPreview by remember { mutableStateOf<Long?>(null) }
@@ -900,7 +915,7 @@ fun AudioOnlyStage(
 private fun TonalSkip(icon: ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Box(
-        Modifier.size(58.dp).pressable(enabled = enabled, onClick = onClick).clip(CircleShape).background(c.surfaceContainerHigh),
+        Modifier.size(46.dp).pressable(enabled = enabled, onClick = onClick).clip(CircleShape).background(c.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, description, tint = c.onSurface, modifier = Modifier.size(34.dp)) }
 }
@@ -1347,7 +1362,7 @@ private fun GlassButton(
                 },
             ),
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, description, tint = Color.White, modifier = Modifier.size(iconSize)) }
+    ) { Icon(icon, description, tint = Color.White.copy(alpha = if (enabled) 1f else 0.45f), modifier = Modifier.size(iconSize)) }
 }
 
 private const val SeekStepMs = 10_000L

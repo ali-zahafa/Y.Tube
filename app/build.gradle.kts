@@ -5,24 +5,33 @@ plugins {
 
 android {
     namespace = "com.tensei.ytxtube"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) { minorApiLevel = 0 }
+    }
 
     defaultConfig {
         applicationId = "com.tensei.ytxtube"
         minSdk = 24
         targetSdk = 36
-        versionCode = 240
-        versionName = "2.4.0"
+        versionCode = 242
+        versionName = "2.4.1"
     }
 
+    val releaseKeystore = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE").orNull
+    val releaseStorePassword = providers.environmentVariable("KEYSTORE_PASSWORD").orNull
+    val releaseKeyAlias = providers.environmentVariable("KEY_ALIAS").orNull
+    val releaseKeyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
+    val releaseSigningAvailable = listOf(
+        releaseKeystore, releaseStorePassword, releaseKeyAlias, releaseKeyPassword,
+    ).all { !it.isNullOrBlank() }
+
     signingConfigs {
-        create("release") {
-            val keystoreFile = file("release.keystore")
-            if (keystoreFile.exists()) {
-                storeFile = keystoreFile
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "androiddebugkey"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+        if (releaseSigningAvailable) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseKeystore))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
                 enableV1Signing = true
                 enableV2Signing = true
                 enableV3Signing = true
@@ -39,7 +48,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.findByName("release")?.takeIf { file("release.keystore").exists() } ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

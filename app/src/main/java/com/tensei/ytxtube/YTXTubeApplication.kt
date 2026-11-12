@@ -49,6 +49,7 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
         BackgroundPlaybackSettings.init(this)
         MiniPlayerSettings.init(this)
         ResumeStore.init(this)
+        WatchHistory.init(this)
         Account.init(this)
         SponsorBlock.init(this)
         SearchHistory.init(this)

@@ -17,7 +17,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingSimpleBasePlayer
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaLibraryInfo
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -47,6 +49,7 @@ import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -58,21 +61,15 @@ import java.io.ByteArrayInputStream
 import java.util.concurrent.Executors
 
 private const val ACTION_CLOSE = "com.tensei.ytxtube.CLOSE"
-private const val ACTION_REWIND_10 = "com.tensei.ytxtube.REWIND_10"
-private const val ACTION_FORWARD_10 = "com.tensei.ytxtube.FORWARD_10"
-private const val ACTION_PREV = "com.tensei.ytxtube.PREV"
-private const val ACTION_NEXT = "com.tensei.ytxtube.NEXT"
-
+internal val START_VIDEO_COMMAND = SessionCommand("com.tensei.ytxtube.START_VIDEO", Bundle.EMPTY)
+internal val SET_UP_NEXT_COMMAND = SessionCommand("com.tensei.ytxtube.SET_UP_NEXT", Bundle.EMPTY)
 private val CLOSE_COMMAND = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
-private val REWIND_10_COMMAND = SessionCommand(ACTION_REWIND_10, Bundle.EMPTY)
-private val FORWARD_10_COMMAND = SessionCommand(ACTION_FORWARD_10, Bundle.EMPTY)
-private val PREV_COMMAND = SessionCommand(ACTION_PREV, Bundle.EMPTY)
-private val NEXT_COMMAND = SessionCommand(ACTION_NEXT, Bundle.EMPTY)
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
+    private lateinit var sessionPlayer: SessionPlayer
     private val resolver = MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(2))
 
     override fun onCreate() {
@@ -132,8 +129,10 @@ class PlaybackService : MediaSessionService() {
         player.addListener(StreamRecoverer(player, sources, resolver))
         networkRecoverer = NetworkRecoverer(this, player).also(player::addListener)
         resumeSaver = ResumeSaver(player).also(player::addListener)
+        historyTracker = WatchHistoryTracker(player)
         watchTime = WatchTimeReporter(player).also(player::addListener)
-        session = MediaSession.Builder(this, player)
+        sessionPlayer = SessionPlayer(player)
+        session = MediaSession.Builder(this, sessionPlayer)
             .setSessionActivity(openApp)
             .setCallback(SessionCallback())
             .build()
@@ -183,12 +182,15 @@ class PlaybackService : MediaSessionService() {
     }
 
     private var resumeSaver: ResumeSaver? = null
+    private var historyTracker: WatchHistoryTracker? = null
     private var watchTime: WatchTimeReporter? = null
     private var networkRecoverer: NetworkRecoverer? = null
     private var sponsorSkipper: SponsorSkipper? = null
 
     override fun onDestroy() {
         resumeSaver?.saveNow()
+        sessionPlayer.cancelPendingSkip()
+        historyTracker?.release()
         watchTime?.finish()
         watchTime?.release()
         networkRecoverer?.release()
@@ -198,8 +200,130 @@ class PlaybackService : MediaSessionService() {
             release()
         }
         session = null
-        resolver.shutdown()
+        resolver.shutdownNow()
         super.onDestroy()
+    }
+
+    private inner class SessionPlayer(private val engine: ExoPlayer) : ForwardingSimpleBasePlayer(engine) {
+        private val main = Handler(Looper.getMainLooper())
+        private var upNext: Pair<String, MediaItem>? = null
+        private var resolving: ListenableFuture<MediaItem>? = null
+
+        private val candidate: MediaItem?
+            get() = upNext?.takeIf { it.first == engine.currentMediaItem?.mediaId }?.second
+
+        init {
+            engine.addListener(object : Player.Listener {
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    cancelPendingSkip()
+                }
+            })
+        }
+
+        override fun getState(): State {
+            val state = super.getState()
+            val commands = state.availableCommands.buildUpon()
+            if (!engine.hasPreviousMediaItem()) commands.remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+            if (!engine.hasNextMediaItem()) {
+                commands.remove(Player.COMMAND_SEEK_TO_NEXT)
+                if (candidate != null) {
+                    commands.add(Player.COMMAND_SEEK_TO_NEXT)
+                    commands.add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                }
+            }
+            return state.buildUpon().setAvailableCommands(commands.build()).build()
+        }
+
+        fun setUpNext(fromId: String, next: MediaItem?) {
+            if (fromId != engine.currentMediaItem?.mediaId) return
+            val nextItem = next?.takeIf { it.mediaId.isNotBlank() && it.mediaId != fromId }
+            if (nextItem?.mediaId == candidate?.mediaId) return
+            cancelPendingSkip()
+            upNext = nextItem?.let { fromId to it }
+            invalidateState()
+        }
+
+        fun startVideo(item: MediaItem, positionMs: Long, replace: Boolean, play: Boolean): Boolean {
+            val sameVideo = engine.currentMediaItem?.mediaId == item.mediaId
+            if (replace && !sameVideo) return false
+            cancelPendingSkip()
+            if (engine.mediaItemCount == 0) {
+                engine.setMediaItem(item, positionMs)
+            } else {
+                val index = engine.currentMediaItemIndex
+                engine.addMediaItem(index + 1, item)
+                engine.seekTo(index + 1, positionMs)
+                if (sameVideo) engine.removeMediaItem(index)
+                val excess = engine.currentMediaItemIndex - 30
+                if (excess > 0) engine.removeMediaItems(0, excess)
+            }
+            engine.prepare()
+            if (play) engine.play()
+            return true
+        }
+
+        override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
+            when (seekCommand) {
+                Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                    if (engine.hasPreviousMediaItem()) {
+                        engine.seekToPreviousMediaItem()
+                        engine.play()
+                    }
+                }
+                Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                    if (engine.hasNextMediaItem()) {
+                        engine.seekToNextMediaItem()
+                        engine.play()
+                    } else {
+                        resolveNext()
+                    }
+                }
+                else -> return super.handleSeek(mediaItemIndex, positionMs, seekCommand)
+            }
+            return Futures.immediateVoidFuture()
+        }
+
+        private fun resolveNext() {
+            val next = candidate ?: return
+            if (resolving != null) return
+            val task = resolver.submit<MediaItem> {
+                if (next.mediaMetadata.extras?.getString("local_uri") == null) {
+                    StreamCache.getOrLoad(next.mediaId)
+                }
+                playableItem(next)
+            }
+            resolving = task
+            task.addListener({
+                main.post {
+                    if (resolving !== task) return@post
+                    resolving = null
+                    val resolved = runCatching { task.get() }.getOrElse {
+                        Log.w("YTXTube", "Could not resolve the next video", it)
+                        return@post
+                    }
+                    if (engine.hasNextMediaItem()) {
+                        engine.seekToNextMediaItem()
+                        engine.play()
+                    } else {
+                        startVideo(resolved, ResumeStore.startPosition(resolved.mediaId), replace = false, play = true)
+                    }
+                }
+            }, MoreExecutors.directExecutor())
+        }
+
+        fun cancelPendingSkip() {
+            val task = resolving
+            resolving = null
+            task?.cancel(false)
+        }
+    }
+
+    private fun playableItem(item: MediaItem): MediaItem {
+        val uri = item.mediaMetadata.extras?.getString("local_uri") ?: YouTube.watchUrl(item.mediaId)
+        return item.buildUpon()
+            .setUri(uri)
+            .setMediaMetadata(item.mediaMetadata.buildUpon().setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO).build())
+            .build()
     }
 
     private inner class SessionCallback : MediaSession.Callback {
@@ -207,53 +331,38 @@ class PlaybackService : MediaSessionService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
-            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                .add(PREV_COMMAND)
-                .add(REWIND_10_COMMAND)
-                .add(FORWARD_10_COMMAND)
-                .add(NEXT_COMMAND)
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(CLOSE_COMMAND)
+                .apply {
+                    if (controller.packageName == packageName) {
+                        add(START_VIDEO_COMMAND)
+                        add(SET_UP_NEXT_COMMAND)
+                    }
+                }
                 .build()
-            val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
-                .add(Player.COMMAND_SEEK_BACK)
-                .add(Player.COMMAND_SEEK_FORWARD)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                .add(Player.COMMAND_SEEK_TO_NEXT)
-                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                .build()
-
-            if (!session.isMediaNotificationController(controller)) {
-                return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                    .setAvailableSessionCommands(sessionCommands)
-                    .setAvailablePlayerCommands(playerCommands)
-                    .build()
-            }
-
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(sessionCommands)
-                .setAvailablePlayerCommands(playerCommands)
+                .setAvailableSessionCommands(commands)
                 .setMediaButtonPreferences(
                     ImmutableList.of(
                         CommandButton.Builder(CommandButton.ICON_PREVIOUS)
-                            .setDisplayName("Previous")
-                            .setSessionCommand(PREV_COMMAND)
+                            .setDisplayName("Previous video")
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                             .setSlots(CommandButton.SLOT_BACK)
                             .build(),
+                        CommandButton.Builder(CommandButton.ICON_NEXT)
+                            .setDisplayName("Next video")
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                            .setSlots(CommandButton.SLOT_FORWARD)
+                            .build(),
                         CommandButton.Builder(CommandButton.ICON_SKIP_BACK_10)
-                            .setDisplayName("Rewind 10s")
-                            .setSessionCommand(REWIND_10_COMMAND)
+                            .setDisplayName("Rewind 10 seconds")
+                            .setPlayerCommand(Player.COMMAND_SEEK_BACK)
                             .setSlots(CommandButton.SLOT_OVERFLOW)
                             .build(),
                         CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD_10)
-                            .setDisplayName("Forward 10s")
-                            .setSessionCommand(FORWARD_10_COMMAND)
+                            .setDisplayName("Forward 10 seconds")
+                            .setPlayerCommand(Player.COMMAND_SEEK_FORWARD)
                             .setSlots(CommandButton.SLOT_OVERFLOW)
-                            .build(),
-                        CommandButton.Builder(CommandButton.ICON_NEXT)
-                            .setDisplayName("Next")
-                            .setSessionCommand(NEXT_COMMAND)
-                            .setSlots(CommandButton.SLOT_FORWARD)
                             .build(),
                         CommandButton.Builder(CommandButton.ICON_UNDEFINED)
                             .setDisplayName("Close")
@@ -272,35 +381,34 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            val p = session.player
-            when (customCommand.customAction) {
-                ACTION_CLOSE -> {
-                    closeFromNotification()
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-                ACTION_REWIND_10 -> {
-                    val target = (p.currentPosition - 10_000L).coerceAtLeast(0L)
-                    p.seekTo(target)
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-                ACTION_FORWARD_10 -> {
-                    val dur = p.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-                    val target = (p.currentPosition + 10_000L).coerceAtMost(dur)
-                    p.seekTo(target)
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-                ACTION_PREV -> {
-                    NotificationQueueBridge.onSkipPrevious?.invoke() ?: run {
-                        if (p.hasPreviousMediaItem()) p.seekToPreviousMediaItem() else p.seekTo(0L)
+            if (controller.packageName == packageName) {
+                when (customCommand) {
+                    START_VIDEO_COMMAND -> {
+                        val item = args.getBundle("item")?.let { MediaItem.fromBundle(it, MediaLibraryInfo.INTERFACE_VERSION) }
+                            ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                        val started = sessionPlayer.startVideo(
+                            playableItem(item), args.getLong("position"),
+                            args.getBoolean("replace"), args.getBoolean("play"),
+                        )
+                        if (!started) {
+                            return Futures.immediateFuture(SessionResult(SessionError.ERROR_INVALID_STATE))
+                        }
+                        if (!args.getBoolean("replace")) {
+                            sessionPlayer.setUpNext(item.mediaId, args.getBundle("next")?.let { MediaItem.fromBundle(it, MediaLibraryInfo.INTERFACE_VERSION) })
+                        }
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-                ACTION_NEXT -> {
-                    NotificationQueueBridge.onSkipNext?.invoke() ?: run {
-                        if (p.hasNextMediaItem()) p.seekToNextMediaItem()
+                    SET_UP_NEXT_COMMAND -> {
+                        val fromId = args.getString("current")
+                            ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                        sessionPlayer.setUpNext(fromId, args.getBundle("next")?.let { MediaItem.fromBundle(it, MediaLibraryInfo.INTERFACE_VERSION) })
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
+            }
+            if (customCommand.customAction == ACTION_CLOSE) {
+                closeFromNotification()
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
             return super.onCustomCommand(session, controller, customCommand, args)
         }
@@ -338,11 +446,6 @@ class PlaybackService : MediaSessionService() {
             }.toMutableList()
         }
     }
-}
-
-internal object NotificationQueueBridge {
-    @Volatile var onSkipPrevious: (() -> Unit)? = null
-    @Volatile var onSkipNext: (() -> Unit)? = null
 }
 
 internal object MediaAudio {

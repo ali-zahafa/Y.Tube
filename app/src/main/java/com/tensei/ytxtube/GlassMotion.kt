@@ -2,6 +2,7 @@
 
 package com.tensei.ytxtube
 
+import android.os.Build
 import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
@@ -161,7 +162,7 @@ class InteractiveHighlight(
     val offset: Offset get() = positionAnimation.value - startPosition
 
     private val shader =
-        if (GlassQuality.effectsSupported) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && GlassQuality.effectsSupported) {
             RuntimeShader(
                 """
 uniform float2 size;
@@ -182,7 +183,7 @@ half4 main(float2 coord) {
     val modifier: Modifier = Modifier.drawWithContent {
         val progress = pressProgressAnimation.value
         if (progress > 0f) {
-            if (shader != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && shader != null) {
                 drawRect(Color.White.copy(0.08f * progress), blendMode = BlendMode.Plus)
                 shader.apply {
                     val p = position(size, positionAnimation.value)
