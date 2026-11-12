@@ -1791,7 +1791,7 @@ object InnerTube {
 
     private const val CHANNEL_VIDEOS_TAB = "EgZ2aWRlb3PyBgQKAjoA"
     private const val CHANNEL_SHORTS_TAB = "EgZzaG9ydHPyBgUKA5oBAA%3D%3D"
-    private const val CHANNEL_LIVE_TAB = "EgZzdHJlYW1z8gYECgJ6AA%3D%3D"
+    private const val CHANNEL_LIVE_TAB = "EgdzdHJlYW1z8gYECgJ6AA%3D%3D"
     private const val CHANNEL_COMMUNITY_TAB = "Egljb21tdW5pdHnyBgQKAkoA"
     suspend fun subscriptionsFeed(next: String? = null) = browse("FEsubscriptions", next)
     suspend fun history(next: String? = null) = browse("FEhistory", next)
