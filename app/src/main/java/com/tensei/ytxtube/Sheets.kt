@@ -40,6 +40,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalContext
@@ -309,10 +311,14 @@ fun SubtitlesSheet(
     val c = MaterialTheme.colorScheme
     val videoId = player.current?.id
     var info by remember(videoId) { mutableStateOf(videoId?.let { StreamCache.get(it) }) }
+    var fallbackTracks by remember(videoId) { mutableStateOf(videoId?.let(CaptionTracks::get).orEmpty()) }
 
     LaunchedEffect(videoId) {
         if (info == null && videoId != null) {
             info = withContext(Dispatchers.IO) { runCatching { StreamCache.getOrLoad(videoId) }.getOrNull() }
+        }
+        if (videoId != null && info?.subtitles.orEmpty().none { it.isUrl && it.content.isNotBlank() }) {
+            fallbackTracks = withContext(Dispatchers.IO) { CaptionTracks.load(videoId) }
         }
     }
 
@@ -322,7 +328,7 @@ fun SubtitlesSheet(
         val url: String?,
     )
 
-    val subtitleTracks = remember(info, videoId) {
+    val subtitleTracks = remember(info, fallbackTracks) {
         val streamTracks = info?.subtitles.orEmpty().filter { it.isUrl && it.content.isNotBlank() }
         if (streamTracks.isNotEmpty()) {
             streamTracks.map { sub ->
@@ -332,12 +338,15 @@ fun SubtitlesSheet(
                 SubtitleOption(code = code, label = label, url = sub.content)
             }
         } else {
-            val fallbackTracks = videoId?.let { CaptionTracks.get(it) ?: runCatching { CaptionTracks.load(it) }.getOrNull() }.orEmpty()
             fallbackTracks.map { track ->
                 SubtitleOption(code = track.languageTag, label = track.label, url = track.url)
             }
         }
     }
+    val translationSources = subtitleTracks.filter { translatedCaptionUrl(it.url.orEmpty(), "ar") != null }
+    var choosingSource by remember(videoId) { mutableStateOf(false) }
+    var translationSource by remember(videoId) { mutableStateOf<SubtitleOption?>(null) }
+    val unavailableMessage = stringResource(R.string.translation_unavailable)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -350,7 +359,42 @@ fun SubtitlesSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
         ) {
+            val source = translationSource
+            if (choosingSource || source != null) {
+                TextButton(onClick = {
+                    if (source != null) translationSource = null else choosingSource = false
+                }) { Text(stringResource(R.string.translation_back)) }
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    if (source == null) {
+                        translationSources.forEach { track ->
+                            TextButton(onClick = { translationSource = track }) {
+                                Text(stringResource(R.string.translation_source, track.label))
+                            }
+                        }
+                    } else {
+                        captionTranslationLanguages.forEach { language ->
+                            val item = LanguageSettings.ALL_LANGUAGES.firstOrNull {
+                                it.code == when (language) {
+                                    "zh-Hans" -> "zh-CN"
+                                    "zh-Hant" -> "zh-TW"
+                                    else -> language
+                                }
+                            }
+                            TextButton(onClick = {
+                                player.translateCaptions(source.url.orEmpty(), language, unavailableMessage)
+                                onDismiss()
+                            }) { Text(item?.nativeName ?: language) }
+                        }
+                    }
+                }
+                return@Column
+            }
             Text("Captions / Subtitles", fontFamily = RoundedHeavy, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+            if (translationSources.isNotEmpty()) {
+                TextButton(onClick = { choosingSource = true }) {
+                    Text(stringResource(R.string.auto_translate_captions))
+                }
+            }
             Spacer(Modifier.height(14.dp))
 
             // Option 1: Off (Turn off captions)

@@ -435,7 +435,7 @@ class PlayerState(private val scope: CoroutineScope) {
         val handOff = startAt?.takeIf { it.first == item.id }?.second
         startAt = null
         setCurrentMedia(player, item, handOff ?: ResumeStore.startPosition(item.id), play = true)
-        if (selectedSubtitleLanguage != null) setSubtitleLanguage(selectedSubtitleLanguage)
+        refreshSubtitleSelection()
         refreshTracks()
     }
 
@@ -783,7 +783,7 @@ class PlayerState(private val scope: CoroutineScope) {
         if (cached != null) {
             syncAudioPreference(cached)
             audioOptions = StreamSelection.audioOptions(cached)
-            if (selectedSubtitleLanguage != null) setSubtitleLanguage(selectedSubtitleLanguage)
+            refreshSubtitleSelection()
             return
         }
         scope.launch {
@@ -793,7 +793,7 @@ class PlayerState(private val scope: CoroutineScope) {
             if (current?.id != id) return@launch
             syncAudioPreference(info)
             audioOptions = StreamSelection.audioOptions(info)
-            if (selectedSubtitleLanguage != null) setSubtitleLanguage(selectedSubtitleLanguage)
+            refreshSubtitleSelection()
         }
     }
 
@@ -822,10 +822,49 @@ class PlayerState(private val scope: CoroutineScope) {
 
     private var activeCues by mutableStateOf<List<ParsedCue>>(emptyList())
     private var subtitleFetchJob: kotlinx.coroutines.Job? = null
+    private var translatedCaptionVideoId: String? = null
+
+    private fun refreshSubtitleSelection() {
+        if (translatedCaptionVideoId != null) {
+            if (translatedCaptionVideoId != current?.id) setSubtitleLanguage(null)
+            return
+        }
+        selectedSubtitleLanguage?.let { setSubtitleLanguage(it) }
+    }
+
+    internal fun translateCaptions(sourceUrl: String, language: String, unavailableMessage: String) {
+        val videoId = current?.id ?: return
+        val url = translatedCaptionUrl(sourceUrl, language) ?: return
+        val player = controller ?: return
+        subtitleFetchJob?.cancel()
+        translatedCaptionVideoId = videoId
+        selectedSubtitleLanguage = language
+        activeCues = emptyList()
+        captionText = null
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            .build()
+        subtitleFetchJob = scope.launch {
+            val cues = withContext(Dispatchers.IO) { SubtitleParser.fetchAndParse(url) }
+            if (current?.id != videoId) return@launch
+            if (cues.isEmpty()) {
+                selectedSubtitleLanguage = null
+                translatedCaptionVideoId = null
+                actionMessage = unavailableMessage
+                return@launch
+            }
+            activeCues = cues
+            val pos = controller?.currentPosition ?: 0L
+            captionText = cues.firstOrNull { pos in it.startMs..it.endMs }?.text
+        }
+    }
 
     fun setSubtitleLanguage(code: String?, trackUrl: String? = null) {
+        translatedCaptionVideoId = null
         selectedSubtitleLanguage = code
         subtitleFetchJob?.cancel()
+        activeCues = emptyList()
+        captionText = null
         val p = controller
         try {
             if (code == null) {
@@ -1187,9 +1226,8 @@ class PlayerState(private val scope: CoroutineScope) {
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (mediaItem != null) onPlayerMovedTo(mediaItem)
-            val lang = selectedSubtitleLanguage
-            if (lang != null) {
-                setSubtitleLanguage(lang)
+            if (selectedSubtitleLanguage != null) {
+                refreshSubtitleSelection()
             } else {
                 captionText = null
                 activeCues = emptyList()
@@ -1197,6 +1235,7 @@ class PlayerState(private val scope: CoroutineScope) {
         }
 
         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+            if (translatedCaptionVideoId != null) return
             val text = cueGroup.cues
                 .mapNotNull { cue -> cue.text?.toString()?.takeIf { it.isNotBlank() } }
                 .joinToString("\n")

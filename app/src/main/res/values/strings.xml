@@ -1,3 +1,10 @@
 <resources>
     <string name="app_name">Y.Tube</string>
+    <string name="clipboard_video_title">Open copied video?</string>
+    <string name="clipboard_video_message">A YouTube video link was copied to your clipboard.</string>
+    <string name="clipboard_video_open">Open in Y.Tube</string>
+    <string name="auto_translate_captions">Auto-translate captions</string>
+    <string name="translation_source">Translate from %1$s</string>
+    <string name="translation_back">Back</string>
+    <string name="translation_unavailable">Translated captions are unavailable for this video.</string>
 </resources>

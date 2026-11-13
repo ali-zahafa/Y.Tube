@@ -7,6 +7,21 @@ import org.schabi.newpipe.extractor.stream.SubtitlesStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
+internal val captionTranslationLanguages = listOf(
+    "ar", "en", "fr", "es", "de", "it", "pt", "tr", "ru", "hi",
+    "ur", "bn", "id", "vi", "th", "ja", "ko", "zh-Hans", "zh-Hant", "nl",
+)
+
+internal fun translatedCaptionUrl(sourceUrl: String, language: String): String? {
+    if (language !in captionTranslationLanguages) return null
+    val url = sourceUrl.toHttpUrlOrNull() ?: return null
+    if (url.scheme != "https" || url.host !in setOf("www.youtube.com", "youtube.com", "m.youtube.com") ||
+        url.encodedPath != "/api/timedtext"
+    ) return null
+    return url.newBuilder().setQueryParameter("fmt", "vtt")
+        .setQueryParameter("tlang", language).build().toString()
+}
+
 /**
  * One side-loadable caption track, already normalised to WebVTT.
  *
