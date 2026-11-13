@@ -1,6 +1,8 @@
 package com.tensei.ytxtube
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +43,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -304,12 +308,72 @@ fun AppearanceSettings() {
 /** Subtitles / Closed Captions selection bottom sheet, matching FlashTube. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+internal fun LiveTranslationSheet(onDismiss: () -> Unit) {
+    var key by remember { mutableStateOf("") }
+    var language by remember { mutableStateOf("ar") }
+    val status = LiveVideoTranslation.status
+    val active = status == LiveVideoTranslation.Status.Connecting || status == LiveVideoTranslation.Status.Listening
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Text(stringResource(R.string.live_translate_video), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+            Text(stringResource(R.string.live_translate_explanation), modifier = Modifier.padding(vertical = 8.dp))
+            when (status) {
+                LiveVideoTranslation.Status.Connecting -> Text(stringResource(R.string.live_translate_connecting))
+                LiveVideoTranslation.Status.Listening -> Text(stringResource(R.string.live_translate_listening))
+                LiveVideoTranslation.Status.Error -> Text(
+                    LiveVideoTranslation.failureCode?.let { stringResource(R.string.live_translate_error_code, it) }
+                        ?: stringResource(R.string.live_translate_error),
+                )
+                LiveVideoTranslation.Status.Off -> Unit
+            }
+            if (active) {
+                TextButton(onClick = { LiveVideoTranslation.stop() }) { Text(stringResource(R.string.live_translate_stop)) }
+            } else {
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = { key = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.live_translate_key)) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(
+                    enabled = key.trim().matches(Regex("[A-Za-z0-9_-]{20,}")),
+                    onClick = {
+                        LiveVideoTranslation.start(key.trim(), language)
+                        key = ""
+                    },
+                ) { Text(stringResource(R.string.live_translate_start)) }
+                val languages = captionTranslationLanguages + "he"
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    languages.forEach { code ->
+                        val displayCode = when (code) {
+                            "zh-Hans" -> "zh-CN"
+                            "zh-Hant" -> "zh-TW"
+                            else -> code
+                        }
+                        val name = LanguageSettings.ALL_LANGUAGES.firstOrNull { it.code == displayCode }?.nativeName ?: code
+                        TextButton(onClick = { language = code }) {
+                            Text(if (language == code) "✓ $name" else name)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun SubtitlesSheet(
     player: PlayerState,
     onDismiss: () -> Unit,
+    translateOnly: Boolean = false,
 ) {
     val c = MaterialTheme.colorScheme
+    val context = LocalContext.current
     val videoId = player.current?.id
+    var loadingTracks by remember(videoId) { mutableStateOf(videoId != null) }
     var info by remember(videoId) { mutableStateOf(videoId?.let { StreamCache.get(it) }) }
     var fallbackTracks by remember(videoId) { mutableStateOf(videoId?.let(CaptionTracks::get).orEmpty()) }
 
@@ -320,6 +384,7 @@ fun SubtitlesSheet(
         if (videoId != null && info?.subtitles.orEmpty().none { it.isUrl && it.content.isNotBlank() }) {
             fallbackTracks = withContext(Dispatchers.IO) { CaptionTracks.load(videoId) }
         }
+        loadingTracks = false
     }
 
     data class SubtitleOption(
@@ -347,6 +412,13 @@ fun SubtitlesSheet(
     var choosingSource by remember(videoId) { mutableStateOf(false) }
     var translationSource by remember(videoId) { mutableStateOf<SubtitleOption?>(null) }
     val unavailableMessage = stringResource(R.string.translation_unavailable)
+    val importError = stringResource(R.string.subtitle_import_error)
+    val importSubtitle = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null && videoId != null && player.current?.id == videoId) {
+            player.importCaptions(context.contentResolver, uri, videoId, importError)
+            onDismiss()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -360,16 +432,25 @@ fun SubtitlesSheet(
                 .padding(bottom = 28.dp),
         ) {
             val source = translationSource
-            if (choosingSource || source != null) {
-                TextButton(onClick = {
-                    if (source != null) translationSource = null else choosingSource = false
-                }) { Text(stringResource(R.string.translation_back)) }
+            if (translateOnly || choosingSource || source != null) {
+                Text(stringResource(R.string.translate_video), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+                if (source != null || !translateOnly) {
+                    TextButton(onClick = {
+                        if (source != null) translationSource = null else choosingSource = false
+                    }) { Text(stringResource(R.string.translation_back)) }
+                }
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     if (source == null) {
+                        if (loadingTracks || translationSources.isEmpty()) {
+                            Text(stringResource(if (loadingTracks) R.string.translation_loading_tracks else R.string.translation_no_source))
+                        }
                         translationSources.forEach { track ->
                             TextButton(onClick = { translationSource = track }) {
                                 Text(stringResource(R.string.translation_source, track.label))
                             }
+                        }
+                        TextButton(onClick = { importSubtitle.launch(arrayOf("*/*")) }) {
+                            Text(stringResource(R.string.subtitle_import))
                         }
                     } else {
                         captionTranslationLanguages.forEach { language ->

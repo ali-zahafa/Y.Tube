@@ -2,12 +2,30 @@ package com.tensei.ytxtube
 
 import android.util.Log
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.nio.ByteBuffer
 import java.util.regex.Pattern
 
 data class ParsedCue(val startMs: Long, val endMs: Long, val text: String)
 
 object SubtitleParser {
     private const val TAG = "SubtitleParser"
+    private const val MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
+
+    internal fun readSubtitleFile(input: InputStream): List<ParsedCue> {
+        val data = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (data.size() + count > MAX_SUBTITLE_BYTES) return emptyList()
+            data.write(buffer, 0, count)
+        }
+        val text = Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(data.toByteArray()))
+            .toString().removePrefix("\uFEFF")
+        return parseVtt(text.trim())
+    }
 
     fun fetchAndParse(url: String): List<ParsedCue> {
         return try {
@@ -17,15 +35,15 @@ object SubtitleParser {
                 .header("Origin", "https://www.youtube.com")
                 .header("Referer", "https://www.youtube.com/")
                 .build()
-            val response = Net.client.newCall(req).execute()
-            if (!response.isSuccessful) {
-                Log.w(TAG, "Subtitle fetch failed: HTTP ${response.code}")
-                return emptyList()
+            Net.client.newCall(req).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "Subtitle fetch failed: HTTP ${response.code}")
+                    return emptyList()
+                }
+                parse(response.body?.string().orEmpty())
             }
-            val body = response.body?.string().orEmpty()
-            parse(body)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch subtitle cues from $url", e)
+            Log.w(TAG, "Failed to fetch subtitle cues", e)
             emptyList()
         }
     }

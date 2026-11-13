@@ -89,6 +89,8 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.ui.res.stringResource
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.luminance
@@ -766,7 +768,7 @@ fun VideoContent(
             }
         }
 
-        val captionText = state.captionText
+        val captionText = LiveVideoTranslation.caption.ifBlank { state.captionText.orEmpty() }.ifBlank { null }
         if (!scrubbing && captionText != null) {
             val captionLift by animateDpAsState(
                 targetValue = if (controlsVisible) EdgeScrubTimeRowBottomPad + EdgeScrubTimeRowHeight + 10.dp else 20.dp,
@@ -1288,6 +1290,24 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
                     onClick = {
                         onDismiss()
                         state.sheet = PlayerSheet.Subtitles
+                    }
+                )
+                PlayerSettingItem(
+                    icon = Icons.Rounded.Translate,
+                    title = stringResource(R.string.translate_video),
+                    value = "",
+                    onClick = {
+                        onDismiss()
+                        state.sheet = PlayerSheet.Translate
+                    }
+                )
+                PlayerSettingItem(
+                    icon = Icons.Rounded.Translate,
+                    title = stringResource(R.string.live_translate_video),
+                    value = "",
+                    onClick = {
+                        onDismiss()
+                        state.sheet = PlayerSheet.LiveTranslate
                     }
                 )
 

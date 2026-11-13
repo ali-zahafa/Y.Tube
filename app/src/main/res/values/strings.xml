@@ -6,5 +6,19 @@
     <string name="auto_translate_captions">Auto-translate captions</string>
     <string name="translation_source">Translate from %1$s</string>
     <string name="translation_back">Back</string>
+    <string name="translate_video">Translate video</string>
+    <string name="translation_loading_tracks">Looking for captions…</string>
+    <string name="translation_no_source">YouTube did not provide a caption track for automatic translation. You can import a subtitle file.</string>
+    <string name="subtitle_import">Import subtitles (SRT or VTT)</string>
+    <string name="subtitle_import_error">Could not read subtitles. Choose a UTF-8 SRT or VTT file up to 8 MB.</string>
     <string name="translation_unavailable">Translated captions are unavailable for this video.</string>
+    <string name="live_translate_video">Live translation from audio</string>
+    <string name="live_translate_explanation">Gemini receives the video’s audio while this is on. Captions appear as it translates. Your API key is kept in memory for this session.</string>
+    <string name="live_translate_key">Gemini API key</string>
+    <string name="live_translate_start">Start live translation</string>
+    <string name="live_translate_stop">Stop live translation</string>
+    <string name="live_translate_connecting">Connecting to Gemini…</string>
+    <string name="live_translate_listening">Listening to video audio</string>
+    <string name="live_translate_error">Gemini connection failed. Check your internet and model access.</string>
+    <string name="live_translate_error_code">Gemini connection failed (%1$d). Check your key, model access, and quota.</string>
 </resources>
