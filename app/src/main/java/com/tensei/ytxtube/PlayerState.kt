@@ -1144,7 +1144,6 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun close() {
-        LiveVideoTranslation.stop()
         clearBackgroundAudio()
         loadJob?.cancel()
         controller?.run { stop(); clearMediaItems() }
@@ -1221,17 +1220,6 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     internal val listener = object : Player.Listener {
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            LiveVideoTranslation.playing = isPlaying
-        }
-
-        override fun onPositionDiscontinuity(
-            oldPosition: Player.PositionInfo,
-            newPosition: Player.PositionInfo,
-            reason: Int,
-        ) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK) LiveVideoTranslation.seek()
-        }
         override fun onEvents(player: Player, events: Player.Events) {
             syncFromPlayer()
             if (events.contains(Player.EVENT_TIMELINE_CHANGED) || events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) rebuildQueue()
@@ -1255,7 +1243,6 @@ class PlayerState(private val scope: CoroutineScope) {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) LiveVideoTranslation.stop()
             if (mediaItem != null) onPlayerMovedTo(mediaItem)
             if (selectedSubtitleLanguage != null) {
                 refreshSubtitleSelection()
@@ -1412,7 +1399,7 @@ fun rememberPlayerState(): PlayerState {
     return state
 }
 
-enum class PlayerSheet { Quality, Comments, Queue, Settings, Speed, Audio, Subtitles, Translate, LiveTranslate }
+enum class PlayerSheet { Quality, Comments, Queue, Settings, Speed, Audio, Subtitles, Translate }
 
 private const val TAG = "YTXTube"
 private const val MEDIA_MUSIC_MODE = "music_mode"
