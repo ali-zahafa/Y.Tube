@@ -768,7 +768,7 @@ fun VideoContent(
             }
         }
 
-        val captionText = state.captionText
+        val captionText = LiveVideoTranslation.caption.ifBlank { state.captionText.orEmpty() }.ifBlank { null }
         if (!scrubbing && captionText != null) {
             val captionLift by animateDpAsState(
                 targetValue = if (controlsVisible) EdgeScrubTimeRowBottomPad + EdgeScrubTimeRowHeight + 10.dp else 20.dp,
@@ -1299,6 +1299,15 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
                     onClick = {
                         onDismiss()
                         state.sheet = PlayerSheet.Translate
+                    }
+                )
+                PlayerSettingItem(
+                    icon = Icons.Rounded.Translate,
+                    title = stringResource(R.string.live_translate_video),
+                    value = "",
+                    onClick = {
+                        onDismiss()
+                        state.sheet = PlayerSheet.LiveTranslate
                     }
                 )
 

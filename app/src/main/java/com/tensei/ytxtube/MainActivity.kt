@@ -196,6 +196,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         shortsPlayerHolder?.pause()
+        LiveVideoTranslation.stop()
     }
 
     override fun onUserLeaveHint() {
@@ -1069,6 +1070,7 @@ fun YtxTubeApp() {
             PlayerSheet.Quality -> QualitySheet(player, onDismiss = { player.sheet = null })
             PlayerSheet.Subtitles -> SubtitlesSheet(player, onDismiss = { player.sheet = null })
             PlayerSheet.Translate -> SubtitlesSheet(player, onDismiss = { player.sheet = null }, translateOnly = true)
+            PlayerSheet.LiveTranslate -> LiveTranslationSheet(onDismiss = { player.sheet = null })
             PlayerSheet.Settings -> Unit
             PlayerSheet.Comments -> Unit
             PlayerSheet.Queue -> QueueSheet(player, onDismiss = { player.sheet = null })
