@@ -445,9 +445,7 @@ fun ChannelScreen(
                 }
                 when (state.activeTab) {
                     ChannelTab.Videos -> {
-                        items(state.videos, key = { it.id }) { video ->
-                            VideoCard(video, onClick = { onOpen(video) }, modifier = Modifier.animateItem())
-                        }
+                        videoCards(state.videos, onOpen)
                         item(key = "videos-footer") {
                             PageFooter(state.loading || state.loadingMore, state.hasMore, ChannelTab.Videos, state::loadMore)
                         }
@@ -492,9 +490,7 @@ fun ChannelScreen(
                                 )
                             }
                         } else {
-                            items(state.liveVideos, key = { it.id }) { video ->
-                                VideoCard(video, onClick = { onOpen(video) }, modifier = Modifier.animateItem())
-                            }
+                            videoCards(state.liveVideos, onOpen)
                             item(key = "live-footer") {
                                 PageFooter(state.liveLoadingMore, state.hasMoreLive, ChannelTab.Live, state::loadMoreLive)
                             }

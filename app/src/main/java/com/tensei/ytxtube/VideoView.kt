@@ -14,6 +14,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -126,6 +130,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
@@ -179,7 +184,6 @@ fun VideoContent(
     fun touched() { touchedAt = System.nanoTime() }
     SideEffect { state.videoControlsVisible = controlsVisible }
     LaunchedEffect(controlsVisible, state.isPlaying, touchedAt) {
-        // A TV remote has no way to bring hidden controls back on its own, so they stay up.
         if (controlsVisible && state.isPlaying && !TvMode.isTv) {
             delay(Motion.ControlsHideMs)
             controlsVisible = false
@@ -251,9 +255,39 @@ fun VideoContent(
     LaunchedEffect(state.current?.id) {
         state.current?.id?.let { ScrubStoryboards.preload(it) }
     }
+    val tvFocus = remember { FocusRequester() }
+    val tvPlayFocus = remember { FocusRequester() }
+    var tvBoxFocused by remember { mutableStateOf(false) }
+    var tvFocusInside by remember { mutableStateOf(false) }
+    LaunchedEffect(interactive, state.sheet) {
+        if (TvMode.isTv && interactive && state.sheet == null) runCatching { tvFocus.requestFocus() }
+    }
+    LaunchedEffect(controlsVisible, state.isPlaying, touchedAt) {
+        if (TvMode.isTv && controlsVisible && state.isPlaying) {
+            delay(4_000)
+            controlsVisible = false
+            if (interactive && tvFocusInside && !tvBoxFocused) runCatching { tvFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(controlsVisible) {
+        if (TvMode.isTv && interactive && controlsVisible && tvBoxFocused) {
+            delay(60)
+            runCatching { tvPlayFocus.requestFocus() }
+        }
+    }
     val tvKeys = Modifier.onPreviewKeyEvent { e ->
         if (!TvMode.isTv || !interactive || e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        if (controlsVisible) touched()
         when (e.key) {
+            Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> when {
+                controlsVisible && !tvBoxFocused -> false
+                else -> {
+                    if (controlsVisible) state.togglePlay()
+                    controlsVisible = true
+                    touched()
+                    true
+                }
+            }
             Key.MediaPlayPause, Key.MediaPlay, Key.MediaPause -> {
                 when (e.key) {
                     Key.MediaPlay -> state.play()
@@ -280,17 +314,23 @@ fun VideoContent(
                 val dpad = e.key == Key.DirectionUp || e.key == Key.DirectionDown ||
                     e.key == Key.DirectionLeft || e.key == Key.DirectionRight ||
                     e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
-                if (dpad && !controlsVisible) {
-                    controlsVisible = true
-                    touched()
-                    true
-                } else {
-                    false
+                when {
+                    dpad && !controlsVisible -> {
+                        controlsVisible = true
+                        touched()
+                        true
+                    }
+                    // D-pad search never enters the focused box's own children, so step onto play/pause;
+                    // arrows then move between HD, speed, ±10s, etc.
+                    dpad && tvBoxFocused -> runCatching { tvPlayFocus.requestFocus() }.isSuccess
+                    else -> false
                 }
             }
         }
     }
-    Box(modifier.background(Color.Black).then(tvKeys).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state, portraitEdgeScrub) {
+    // Only the active player: a hidden, non-interactive instance (e.g. watch page behind fullscreen) would trap focus invisibly.
+    val tvFocusable = if (TvMode.isTv && interactive) Modifier.focusRequester(tvFocus).onFocusChanged { tvBoxFocused = it.isFocused; tvFocusInside = it.hasFocus }.focusable() else Modifier
+    Box(modifier.background(Color.Black).then(tvKeys).then(tvFocusable).onGloballyPositioned { pip?.videoBounds = it.boundsInWindow() }.pointerInput(state, portraitEdgeScrub) {
         val doubleTapMs = viewConfiguration.doubleTapTimeoutMillis
         val holdSpeedMs = Motion.HoldSpeedMs
         coroutineScope {
@@ -649,6 +689,7 @@ fun VideoContent(
                         playing = state.isPlaying,
                         buffering = state.isBuffering || (state.loading && state.details == null),
                         size = if (fullscreen) 70.dp else 61.dp,
+                        modifier = Modifier.focusRequester(tvPlayFocus),
 
                         container = Color.Transparent,
                         content = Color.White,
@@ -792,7 +833,21 @@ fun VideoContent(
                     if (dragging) state.beginScrubDragging()
                     else state.endScrubDragging()
                 },
-                modifier = scrubModifier.zIndex(10f),
+                // TV: seek bar is touch-only otherwise. Focusable while controls are up; Left/Right seek 10s (hold repeats).
+                modifier = scrubModifier.then(
+                    if (TvMode.isTv) Modifier
+                        .tvFocusRing(radius = 8.dp)
+                        .onKeyEvent { e ->
+                            if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                            when (e.key) {
+                                Key.DirectionLeft -> { state.seekBy(-10_000); touched(); true }
+                                Key.DirectionRight -> { state.seekBy(10_000); touched(); true }
+                                else -> false
+                            }
+                        }
+                        .focusable(enabled = scrubActive)
+                    else Modifier,
+                ).zIndex(10f),
             )
         }
         if (scrubbing && scrubPreviewMs != null) {
@@ -1189,6 +1244,7 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .tvFocusOnShow()
                     .verticalScroll(rememberScrollState()),
             ) {
 
@@ -1486,6 +1542,7 @@ fun MorphPlayButton(
     enabled: Boolean = true,
     backdrop: Modifier = Modifier,
     glass: Boolean = false,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val reduced = rememberReducedMotion()
@@ -1496,7 +1553,7 @@ fun MorphPlayButton(
     )
     val shape = RoundedCornerShape(radius)
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(size)
             .pressable(enabled = enabled, onClick = onClick)
             .clip(shape)
