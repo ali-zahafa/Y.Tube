@@ -43,8 +43,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -306,63 +304,6 @@ fun AppearanceSettings() {
 }
 
 /** Subtitles / Closed Captions selection bottom sheet, matching FlashTube. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun LiveTranslationSheet(onDismiss: () -> Unit) {
-    var key by remember { mutableStateOf("") }
-    var language by remember { mutableStateOf("ar") }
-    val status = LiveVideoTranslation.status
-    val active = status == LiveVideoTranslation.Status.Connecting || status == LiveVideoTranslation.Status.Listening
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-            Text(stringResource(R.string.live_translate_video), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
-            Text(stringResource(R.string.live_translate_explanation), modifier = Modifier.padding(vertical = 8.dp))
-            when (status) {
-                LiveVideoTranslation.Status.Connecting -> Text(stringResource(R.string.live_translate_connecting))
-                LiveVideoTranslation.Status.Listening -> Text(stringResource(R.string.live_translate_listening))
-                LiveVideoTranslation.Status.Error -> Text(
-                    LiveVideoTranslation.failureCode?.let { stringResource(R.string.live_translate_error_code, it) }
-                        ?: stringResource(R.string.live_translate_error),
-                )
-                LiveVideoTranslation.Status.Off -> Unit
-            }
-            if (active) {
-                TextButton(onClick = { LiveVideoTranslation.stop() }) { Text(stringResource(R.string.live_translate_stop)) }
-            } else {
-                OutlinedTextField(
-                    value = key,
-                    onValueChange = { key = it },
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.live_translate_key)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                TextButton(
-                    enabled = key.trim().matches(Regex("[A-Za-z0-9_-]{20,}")),
-                    onClick = {
-                        LiveVideoTranslation.start(key.trim(), language)
-                        key = ""
-                    },
-                ) { Text(stringResource(R.string.live_translate_start)) }
-                val languages = captionTranslationLanguages + "he"
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                    languages.forEach { code ->
-                        val displayCode = when (code) {
-                            "zh-Hans" -> "zh-CN"
-                            "zh-Hant" -> "zh-TW"
-                            else -> code
-                        }
-                        val name = LanguageSettings.ALL_LANGUAGES.firstOrNull { it.code == displayCode }?.nativeName ?: code
-                        TextButton(onClick = { language = code }) {
-                            Text(if (language == code) "✓ $name" else name)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubtitlesSheet(
