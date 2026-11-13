@@ -1,6 +1,7 @@
 package com.tensei.ytxtube
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
 import android.content.pm.PackageManager
@@ -87,6 +88,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.res.stringResource
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -131,10 +135,15 @@ class MainActivity : ComponentActivity() {
     internal var shortsPlayerHolder: androidx.media3.exoplayer.ExoPlayer? = null
     internal var pipController: PipController? = null
     internal var intentHandler: ((Intent) -> Unit)? = null
+    internal var clipboardVideo by mutableStateOf<YouTubeLinkTarget?>(null)
+    private var checkedClipboard = false
+    private var explicitVideoLink: YouTubeLinkTarget? = null
+    private var lastClipboardVideo: Pair<YouTubeLinkTarget, Long>? = null
     private val exitFromNotification: () -> Unit = { finishAndRemoveTask() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        explicitVideoLink = parseIncomingIntent(intent)
         // The notification's close button stops playback in the service; it then asks the
         // visible UI (if any) to leave too, so YTXTube exits completely.
         AppExit.onExit = exitFromNotification
@@ -172,9 +181,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         setHighestRefreshRate()
+        window.decorView.post { checkClipboardVideo() }
     }
 
     override fun onPause() {
+        checkedClipboard = false
         super.onPause()
         shortsPlayerHolder?.pause()
     }
@@ -204,7 +215,36 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        explicitVideoLink = parseIncomingIntent(intent)
+        if (explicitVideoLink != null) clipboardVideo = null
         intentHandler?.invoke(intent)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) checkClipboardVideo()
+    }
+
+    private fun checkClipboardVideo() {
+        if (checkedClipboard || !hasWindowFocus() ||
+            !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) ||
+            isInPictureInPictureMode
+        ) return
+        checkedClipboard = true
+        val explicitTarget = explicitVideoLink
+        explicitVideoLink = null
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        val clip = runCatching { clipboard.primaryClip }.getOrNull() ?: return
+        if (clip.itemCount == 0 ||
+            clip.description.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true
+        ) return
+        val item = clip.getItemAt(0)
+        val target = parseClipboardVideo(item.text?.toString() ?: item.uri?.toString().orEmpty()) ?: return
+        val timestamp = if (Build.VERSION.SDK_INT >= 26) clip.description.timestamp else 0L
+        val entry = target to timestamp
+        if (lastClipboardVideo == entry) return
+        lastClipboardVideo = entry
+        if (target != explicitTarget) clipboardVideo = target
     }
 
     private fun setHighestRefreshRate() {
@@ -434,8 +474,7 @@ fun YtxTubeApp() {
         activity.moveTaskToBack(true)
     }
 
-    fun handleIntent(inIntent: Intent?) {
-        val target = parseIncomingIntent(inIntent) ?: return
+    fun openVideoLink(target: YouTubeLinkTarget) {
         if (target.isShort) {
             shortsEntry = VideoItem(
                 id = target.videoId,
@@ -467,9 +506,28 @@ fun YtxTubeApp() {
     }
 
     DisposableEffect(mainActivity) {
-        mainActivity?.intentHandler = { handleIntent(it) }
-        handleIntent(mainActivity?.intent)
+        mainActivity?.intentHandler = { parseIncomingIntent(it)?.let(::openVideoLink) }
+        parseIncomingIntent(mainActivity?.intent)?.let(::openVideoLink)
         onDispose { mainActivity?.intentHandler = null }
+    }
+
+    mainActivity?.clipboardVideo?.let { target ->
+        AlertDialog(
+            onDismissRequest = { mainActivity.clipboardVideo = null },
+            title = { Text(stringResource(R.string.clipboard_video_title)) },
+            text = { Text(stringResource(R.string.clipboard_video_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    mainActivity.clipboardVideo = null
+                    openVideoLink(target)
+                }) { Text(stringResource(R.string.clipboard_video_open)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { mainActivity.clipboardVideo = null }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
     }
 
     pip.Bind(onClosed = { player.controller?.pause() })
@@ -1206,6 +1264,23 @@ private fun NavPill(selected: Tab, onSelect: (Tab) -> Unit, modifier: Modifier =
 }
 
 internal data class YouTubeLinkTarget(val videoId: String, val isShort: Boolean)
+
+internal fun parseClipboardVideo(text: String): YouTubeLinkTarget? {
+    val url = text.trim().toHttpUrlOrNull() ?: return null
+    val parts = url.pathSegments
+    val route = parts.firstOrNull()
+    val id = when (url.host) {
+        "youtu.be" -> parts.singleOrNull()
+        "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com" -> when (route) {
+            "watch" -> if (parts.size == 1) url.queryParameter("v") else null
+            "shorts", "live", "embed", "v" -> if (parts.size == 2) parts[1] else null
+            else -> null
+        }
+        else -> null
+    } ?: return null
+    if (!id.matches(Regex("[A-Za-z0-9_-]{11}"))) return null
+    return YouTubeLinkTarget(id, url.host != "youtu.be" && route == "shorts")
+}
 
 internal fun parseIncomingIntent(intent: Intent?): YouTubeLinkTarget? {
     if (intent == null) return null

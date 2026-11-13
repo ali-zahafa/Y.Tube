@@ -1,0 +1,9 @@
+<resources>
+    <string name="clipboard_video_title">فتح الفيديو المنسوخ؟</string>
+    <string name="clipboard_video_message">تم نسخ رابط فيديو من يوتيوب إلى الحافظة.</string>
+    <string name="clipboard_video_open">فتح في Y.Tube</string>
+    <string name="auto_translate_captions">ترجمة تلقائية للكابشن</string>
+    <string name="translation_source">ترجمة من %1$s</string>
+    <string name="translation_back">رجوع</string>
+    <string name="translation_unavailable">الترجمة التلقائية غير متاحة لهذا الفيديو.</string>
+</resources>
