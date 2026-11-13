@@ -1068,6 +1068,7 @@ fun YtxTubeApp() {
         when (player.sheet) {
             PlayerSheet.Quality -> QualitySheet(player, onDismiss = { player.sheet = null })
             PlayerSheet.Subtitles -> SubtitlesSheet(player, onDismiss = { player.sheet = null })
+            PlayerSheet.Translate -> SubtitlesSheet(player, onDismiss = { player.sheet = null }, translateOnly = true)
             PlayerSheet.Settings -> Unit
             PlayerSheet.Comments -> Unit
             PlayerSheet.Queue -> QueueSheet(player, onDismiss = { player.sheet = null })

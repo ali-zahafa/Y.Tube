@@ -6,5 +6,10 @@
     <string name="auto_translate_captions">Auto-translate captions</string>
     <string name="translation_source">Translate from %1$s</string>
     <string name="translation_back">Back</string>
+    <string name="translate_video">Translate video</string>
+    <string name="translation_loading_tracks">Looking for captions…</string>
+    <string name="translation_no_source">YouTube did not provide a caption track for automatic translation. You can import a subtitle file.</string>
+    <string name="subtitle_import">Import subtitles (SRT or VTT)</string>
+    <string name="subtitle_import_error">Could not read subtitles. Choose a UTF-8 SRT or VTT file up to 8 MB.</string>
     <string name="translation_unavailable">Translated captions are unavailable for this video.</string>
 </resources>

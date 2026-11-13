@@ -5,5 +5,10 @@
     <string name="auto_translate_captions">ترجمة تلقائية للكابشن</string>
     <string name="translation_source">ترجمة من %1$s</string>
     <string name="translation_back">رجوع</string>
+    <string name="translate_video">ترجمة الفيديو</string>
+    <string name="translation_loading_tracks">جارٍ البحث عن مسارات الترجمة…</string>
+    <string name="translation_no_source">لم يوفّر يوتيوب مسارًا للترجمة التلقائية. يمكنك استيراد ملف ترجمة.</string>
+    <string name="subtitle_import">استيراد ترجمة (SRT أو VTT)</string>
+    <string name="subtitle_import_error">تعذّرت قراءة الترجمة. اختر ملف SRT أو VTT بترميز UTF-8 وحجم لا يتجاوز 8 ميغابايت.</string>
     <string name="translation_unavailable">الترجمة التلقائية غير متاحة لهذا الفيديو.</string>
 </resources>

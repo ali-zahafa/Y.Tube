@@ -89,6 +89,8 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.ui.res.stringResource
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.luminance
@@ -1288,6 +1290,15 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
                     onClick = {
                         onDismiss()
                         state.sheet = PlayerSheet.Subtitles
+                    }
+                )
+                PlayerSettingItem(
+                    icon = Icons.Rounded.Translate,
+                    title = stringResource(R.string.translate_video),
+                    value = "",
+                    onClick = {
+                        onDismiss()
+                        state.sheet = PlayerSheet.Translate
                     }
                 )
 

@@ -1,5 +1,8 @@
 package com.tensei.ytxtube
 
+import android.content.ContentResolver
+import android.net.Uri
+
 import android.content.ComponentName
 import android.util.Log
 import androidx.annotation.OptIn
@@ -837,28 +840,41 @@ class PlayerState(private val scope: CoroutineScope) {
     internal fun translateCaptions(sourceUrl: String, language: String, unavailableMessage: String) {
         val videoId = current?.id ?: return
         val url = translatedCaptionUrl(sourceUrl, language) ?: return
-        val player = controller ?: return
         subtitleFetchJob?.cancel()
+        subtitleFetchJob = scope.launch {
+            val cues = withContext(Dispatchers.IO) { SubtitleParser.fetchAndParse(url) }
+            showExternalCaptions(videoId, language, cues, unavailableMessage)
+        }
+    }
+
+    internal fun importCaptions(resolver: ContentResolver, uri: Uri, videoId: String, errorMessage: String) {
+        if (current?.id != videoId) return
+        subtitleFetchJob?.cancel()
+        subtitleFetchJob = scope.launch {
+            val cues = withContext(Dispatchers.IO) {
+                runCatching {
+                    resolver.openInputStream(uri)?.use { SubtitleParser.readSubtitleFile(it) }.orEmpty()
+                }.getOrDefault(emptyList())
+            }
+            showExternalCaptions(videoId, "und", cues, errorMessage)
+        }
+    }
+
+    private fun showExternalCaptions(videoId: String, language: String, cues: List<ParsedCue>, errorMessage: String) {
+        if (current?.id != videoId) return
+        if (cues.isEmpty()) {
+            actionMessage = errorMessage
+            return
+        }
+        val player = controller ?: return
         translatedCaptionVideoId = videoId
         selectedSubtitleLanguage = language
-        activeCues = emptyList()
-        captionText = null
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .build()
-        subtitleFetchJob = scope.launch {
-            val cues = withContext(Dispatchers.IO) { SubtitleParser.fetchAndParse(url) }
-            if (current?.id != videoId) return@launch
-            if (cues.isEmpty()) {
-                selectedSubtitleLanguage = null
-                translatedCaptionVideoId = null
-                actionMessage = unavailableMessage
-                return@launch
-            }
-            activeCues = cues
-            val pos = controller?.currentPosition ?: 0L
-            captionText = cues.firstOrNull { pos in it.startMs..it.endMs }?.text
-        }
+        activeCues = cues
+        val pos = player.currentPosition
+        captionText = cues.firstOrNull { pos in it.startMs..it.endMs }?.text
     }
 
     fun setSubtitleLanguage(code: String?, trackUrl: String? = null) {
@@ -1383,7 +1399,7 @@ fun rememberPlayerState(): PlayerState {
     return state
 }
 
-enum class PlayerSheet { Quality, Comments, Queue, Settings, Speed, Audio, Subtitles }
+enum class PlayerSheet { Quality, Comments, Queue, Settings, Speed, Audio, Subtitles, Translate }
 
 private const val TAG = "YTXTube"
 private const val MEDIA_MUSIC_MODE = "music_mode"

@@ -1,6 +1,8 @@
 package com.tensei.ytxtube
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -307,9 +309,12 @@ fun AppearanceSettings() {
 fun SubtitlesSheet(
     player: PlayerState,
     onDismiss: () -> Unit,
+    translateOnly: Boolean = false,
 ) {
     val c = MaterialTheme.colorScheme
+    val context = LocalContext.current
     val videoId = player.current?.id
+    var loadingTracks by remember(videoId) { mutableStateOf(videoId != null) }
     var info by remember(videoId) { mutableStateOf(videoId?.let { StreamCache.get(it) }) }
     var fallbackTracks by remember(videoId) { mutableStateOf(videoId?.let(CaptionTracks::get).orEmpty()) }
 
@@ -320,6 +325,7 @@ fun SubtitlesSheet(
         if (videoId != null && info?.subtitles.orEmpty().none { it.isUrl && it.content.isNotBlank() }) {
             fallbackTracks = withContext(Dispatchers.IO) { CaptionTracks.load(videoId) }
         }
+        loadingTracks = false
     }
 
     data class SubtitleOption(
@@ -347,6 +353,13 @@ fun SubtitlesSheet(
     var choosingSource by remember(videoId) { mutableStateOf(false) }
     var translationSource by remember(videoId) { mutableStateOf<SubtitleOption?>(null) }
     val unavailableMessage = stringResource(R.string.translation_unavailable)
+    val importError = stringResource(R.string.subtitle_import_error)
+    val importSubtitle = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null && videoId != null && player.current?.id == videoId) {
+            player.importCaptions(context.contentResolver, uri, videoId, importError)
+            onDismiss()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -360,16 +373,25 @@ fun SubtitlesSheet(
                 .padding(bottom = 28.dp),
         ) {
             val source = translationSource
-            if (choosingSource || source != null) {
-                TextButton(onClick = {
-                    if (source != null) translationSource = null else choosingSource = false
-                }) { Text(stringResource(R.string.translation_back)) }
+            if (translateOnly || choosingSource || source != null) {
+                Text(stringResource(R.string.translate_video), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+                if (source != null || !translateOnly) {
+                    TextButton(onClick = {
+                        if (source != null) translationSource = null else choosingSource = false
+                    }) { Text(stringResource(R.string.translation_back)) }
+                }
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     if (source == null) {
+                        if (loadingTracks || translationSources.isEmpty()) {
+                            Text(stringResource(if (loadingTracks) R.string.translation_loading_tracks else R.string.translation_no_source))
+                        }
                         translationSources.forEach { track ->
                             TextButton(onClick = { translationSource = track }) {
                                 Text(stringResource(R.string.translation_source, track.label))
                             }
+                        }
+                        TextButton(onClick = { importSubtitle.launch(arrayOf("*/*")) }) {
+                            Text(stringResource(R.string.subtitle_import))
                         }
                     } else {
                         captionTranslationLanguages.forEach { language ->
