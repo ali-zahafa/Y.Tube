@@ -55,6 +55,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator
 import org.schabi.newpipe.extractor.stream.Stream
 import java.io.ByteArrayInputStream
@@ -796,6 +797,7 @@ internal object YouTubeStreamHttp {
     fun userAgentForUrl(url: String): String {
         val clientParam = Regex("[?&]c=([^&]+)").find(url)?.groupValues?.getOrNull(1)?.uppercase().orEmpty()
         return when {
+            clientParam == "VISIONOS" -> YoutubeParsingHelper.getVisionOsUserAgent(null)
             clientParam.contains("IOS") -> UA_IOS
             clientParam.contains("ANDROID_VR") -> UA_ANDROID_VR
             clientParam.contains("ANDROID") -> UA_ANDROID
@@ -807,14 +809,13 @@ internal object YouTubeStreamHttp {
     fun createDataSourceFactory(context: Context): DataSource.Factory {
         val dynamicOkHttpFactory = object : DataSource.Factory {
             override fun createDataSource(): DataSource {
-                val base = OkHttpDataSource.Factory(Net.client)
-                    .setUserAgent(Net.USER_AGENT)
-                    .createDataSource()
+                val base = OkHttpDataSource.Factory(Net.client).createDataSource()
                 return object : DataSource by base {
                     override fun open(dataSpec: DataSpec): Long {
                         val url = dataSpec.uri.toString()
                         val ua = userAgentForUrl(url)
                         val headers = HashMap(dataSpec.httpRequestHeaders)
+                        headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
                         if (ua == Net.USER_AGENT) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
