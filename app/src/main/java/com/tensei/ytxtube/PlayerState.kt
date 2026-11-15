@@ -939,7 +939,12 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
 
-    fun retry() = current?.let { item -> StreamCache.invalidate(item.id); current = null; open(item) }
+    fun retry() = current?.let { item ->
+        StreamRecovery.reset(item.id)
+        StreamCache.invalidate(item.id)
+        current = null
+        open(item)
+    }
 
     fun togglePlay() {
         val player = controller ?: return
@@ -1287,7 +1292,9 @@ class PlayerState(private val scope: CoroutineScope) {
         }
 
         override fun onPlayerError(e: PlaybackException) {
-            val status = (e.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+            val status = generateSequence(e.cause) { it.cause }
+                .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+                .firstOrNull()?.responseCode
             Log.w(TAG, "playback error ${e.errorCodeName}${status?.let { " (HTTP $it)" } ?: ""} for ${current?.id}", e)
 
             if (e.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && StreamRecovery.recovering == current?.id) return
@@ -1295,7 +1302,8 @@ class PlayerState(private val scope: CoroutineScope) {
             error = when (e.errorCode) {
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Lost the connection. Playback resumes when you're back online, or try again."
-                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "YouTube refused the stream. Try again."
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ->
+                    "YouTube refused the stream${status?.let { " (HTTP $it)" }.orEmpty()}. Try again."
                 else -> "This video couldn't be played."
             }
         }
