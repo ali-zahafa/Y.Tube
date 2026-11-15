@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.tensei.ytxtube"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.tensei.ytxtube"
@@ -59,10 +59,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
-    
-    buildFeatures { 
+
+    buildFeatures {
         compose = true
-        buildConfig = true 
+        buildConfig = true
     }
 
     dependenciesInfo {
