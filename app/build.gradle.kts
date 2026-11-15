@@ -11,8 +11,8 @@ android {
         applicationId = "com.tensei.ytxtube"
         minSdk = 24
         targetSdk = 34
-        versionCode = 245
-        versionName = "2.4.4"
+        versionCode = 250
+        versionName = "2.5.0-Y.Tube"
     }
 
     val releaseKeystore = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE").orNull
@@ -57,7 +57,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-
         isCoreLibraryDesugaringEnabled = true
     }
     
@@ -104,7 +103,7 @@ kotlin {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
-    val media3 = "1.4.1"
+    val media3 = "1.10.1"
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
@@ -122,7 +121,7 @@ dependencies {
     implementation("io.github.kyant0:backdrop:2.0.1")
     implementation("io.github.kyant0:shapes:1.2.1")
 
-    // Media3 Core and UI Libraries (Fixed Unresolved reference 'PlayerView')
+    // Media3 Core and UI Libraries matching project version 1.10.1
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
@@ -130,7 +129,6 @@ dependencies {
     implementation("androidx.media3:media3-database:$media3")
     implementation("androidx.media3:media3-session:$media3")
     implementation("androidx.media3:media3-ui:$media3")
-    implementation("androidx.media3:media3-ui-compose:$media3")
 
     implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
