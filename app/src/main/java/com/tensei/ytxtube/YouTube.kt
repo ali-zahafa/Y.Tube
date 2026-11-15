@@ -243,7 +243,7 @@ object YouTube {
         VideoDetails(
             item = VideoItem(
                 id = id,
-                title = info.name,
+                title = DeArrow.title(id) ?: info.name,
                 channel = info.uploaderName.orEmpty(),
                 channelUrl = info.uploaderUrl,
                 thumbnail = sharpenFeedThumbnail(info.thumbnails.bestUrl(), id),

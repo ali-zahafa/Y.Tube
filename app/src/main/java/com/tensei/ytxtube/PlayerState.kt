@@ -939,7 +939,12 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
 
-    fun retry() = current?.let { item -> StreamCache.invalidate(item.id); current = null; open(item) }
+    fun retry() = current?.let { item ->
+        StreamRecovery.reset(item.id)
+        StreamCache.invalidate(item.id)
+        current = null
+        open(item)
+    }
 
     fun togglePlay() {
         val player = controller ?: return

@@ -38,6 +38,7 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
         Thread({ VideoDecoders.warmUp() }, "decoder-probe").start()
         QualityPreference.init(this)
         PlaybackSpeed.init(this)
+        SuperPlayerSettings.init(this)
         AudioOnly.init(this)
         AudioTrackPreference.init(this)
         CaptionPreference.init(this)

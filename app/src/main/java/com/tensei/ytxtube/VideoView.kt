@@ -446,28 +446,26 @@ fun VideoContent(
                             controlsVisible = false
                             burstActive = false
                             try {
-                                if (fullscreen) {
-                                    val activationY = lastY
-                                    val deadZone = viewConfiguration.touchSlop
-                                    do {
-                                        val event = awaitPointerEvent()
-                                        val finger = event.changes.firstOrNull { it.id == down.id }
-                                        if (finger == null || finger.isConsumed) break
-                                        val distance = activationY - finger.position.y
-                                        val offset = when {
-                                            distance > deadZone -> distance - deadZone
-                                            distance < -deadZone -> distance + deadZone
-                                            else -> 0f
-                                        }
-                                        if (finger.pressed) {
-                                            val speed = 2f + 2.5f * offset / size.height.coerceAtLeast(1)
-                                            state.previewSpeed(speed.coerceIn(1.25f, PlaybackSpeed.MAX))
-                                        }
-                                        finger.consume()
-                                    } while (finger.pressed)
-                                } else {
-                                    waitForUpOrCancellation()?.consume()
-                                }
+                                val activationY = lastY
+                                val deadZone = viewConfiguration.touchSlop
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val finger = event.changes.firstOrNull { it.id == down.id }
+                                    if (finger == null || finger.isConsumed) break
+                                    val distance = activationY - finger.position.y
+                                    val offset = when {
+                                        distance > deadZone -> distance - deadZone
+                                        distance < -deadZone -> distance + deadZone
+                                        else -> 0f
+                                    }
+                                    if (finger.pressed) {
+                                        val gestureSpan = (size.height / 2f - deadZone).coerceAtLeast(1f)
+                                        val fraction = offset / gestureSpan
+                                        val speed = 2f + fraction * if (fraction >= 0f) 2f else 0.75f
+                                        state.previewSpeed(speed.coerceIn(1.25f, PlaybackSpeed.MAX))
+                                    }
+                                    finger.consume()
+                                } while (finger.pressed)
                             } finally {
                                 state.endHoldSpeed()
                             }
