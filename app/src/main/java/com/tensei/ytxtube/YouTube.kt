@@ -255,7 +255,7 @@ object YouTube {
             ),
             description = info.description?.let { d ->
                 if (d.type() == Description.Type.HTML) HtmlCompat.fromHtml(d.content(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
-                else d.content.trim()
+                else d.content().trim()
             }.orEmpty(),
             likes = info.likeCount,
             subscribers = info.uploaderSubscriberCount,
