@@ -410,7 +410,6 @@ fun VideoContent(
                                             gestureHud = Pair(icon, Pair("Volume", newV.toFloat() / maxV.toFloat()))
                                         }
                                     }
-                                    lastY = change.position.y
                                 }
                             } else {
 
@@ -426,6 +425,7 @@ fun VideoContent(
                                     return@withTimeoutOrNull null
                                 }
                             }
+                            lastY = change.position.y
                         }
                         event = awaitPointerEvent()
                     }
@@ -445,8 +445,32 @@ fun VideoContent(
                             currentView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             controlsVisible = false
                             burstActive = false
-                            waitForUpOrCancellation()?.consume()
-                            state.endHoldSpeed()
+                            try {
+                                if (fullscreen) {
+                                    val activationY = lastY
+                                    val deadZone = viewConfiguration.touchSlop
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val finger = event.changes.firstOrNull { it.id == down.id }
+                                        if (finger == null || finger.isConsumed) break
+                                        val distance = activationY - finger.position.y
+                                        val offset = when {
+                                            distance > deadZone -> distance - deadZone
+                                            distance < -deadZone -> distance + deadZone
+                                            else -> 0f
+                                        }
+                                        if (finger.pressed) {
+                                            val speed = 2f + 2.5f * offset / size.height.coerceAtLeast(1)
+                                            state.previewSpeed(speed.coerceIn(1.25f, PlaybackSpeed.MAX))
+                                        }
+                                        finger.consume()
+                                    } while (finger.pressed)
+                                } else {
+                                    waitForUpOrCancellation()?.consume()
+                                }
+                            } finally {
+                                state.endHoldSpeed()
+                            }
                         } else {
                             waitForUpOrCancellation()?.consume()
                         }
@@ -556,7 +580,7 @@ fun VideoContent(
             SeekBurstPill(burstSide, burstSeconds, burstTaps, burstActive, fullscreen)
         }
         if (state.holdSpeedActive) {
-            HoldSpeedPill(Modifier.align(Alignment.TopCenter).padding(top = 12.dp).graphicsLayer { alpha = controlsAlpha() })
+            HoldSpeedPill(state.speed, Modifier.align(Alignment.TopCenter).padding(top = 12.dp).graphicsLayer { alpha = controlsAlpha() })
         }
         gestureHud?.let { (icon, info) ->
             GestureHUD(icon = icon, label = info.first, percent = info.second, modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp))
@@ -1010,9 +1034,9 @@ fun FullscreenPlayer(state: PlayerState, onExit: () -> Unit) {
 }
 
 @Composable
-private fun HoldSpeedPill(modifier: Modifier = Modifier) {
+private fun HoldSpeedPill(speed: Float, modifier: Modifier = Modifier) {
     Text(
-        "2×",
+        "${speed.toString().removeSuffix(".0")}×",
         color = Color.White,
         fontSize = 13.sp,
         fontWeight = FontWeight.Black,
