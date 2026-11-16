@@ -1333,6 +1333,16 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
 
 
                 PlayerSettingItem(
+                    icon = Icons.Rounded.PlayCircle,
+                    title = "YouTube Web Player (optional)",
+                    value = if (state.webPlayerEnabled) "On" else "Off",
+                    onClick = {
+                        state.setWebPlayerEnabled(!state.webPlayerEnabled)
+                        onDismiss()
+                    }
+                )
+
+                PlayerSettingItem(
                     icon = Icons.Rounded.Repeat,
                     title = "Loop video",
                     value = if (state.loopEnabled) "On" else "Off",
