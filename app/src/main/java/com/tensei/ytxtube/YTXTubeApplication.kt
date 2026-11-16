@@ -32,14 +32,13 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
         poTokenGenerator.initialize()
         YoutubeStreamExtractor.setPoTokenProvider(YtxPoTokenProvider(poTokenGenerator))
 
-
-        YoutubeStreamExtractor.setFetchIosClient(true)
         HdrItags.install()
         ThemeSettings.init(this)
         HdrSupport.init(this)
         Thread({ VideoDecoders.warmUp() }, "decoder-probe").start()
         QualityPreference.init(this)
         PlaybackSpeed.init(this)
+        SuperPlayerSettings.init(this)
         AudioOnly.init(this)
         AudioTrackPreference.init(this)
         CaptionPreference.init(this)
