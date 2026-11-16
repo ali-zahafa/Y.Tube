@@ -843,7 +843,7 @@ object Downloads {
             return Request.Builder()
                 .url(finalUrl)
                 .header("Range", "bytes=0-0")
-                .header("User-Agent", Net.USER_AGENT)
+                .header("User-Agent", YouTubeStreamHttp.userAgentForUrl(url))
                 .header("Referer", "https://www.youtube.com/")
                 .build()
         }
@@ -883,11 +883,27 @@ object Downloads {
         // So the file is fetched as consecutive byte ranges, like NewPipe and yt-dlp do.
         var chunked = remote.ranges && remote.total > 0
 
+        var useParallel = chunked && remote.total - downloaded > DownloadFormats.CHUNK_BYTES
         while (remote.total <= 0 || downloaded < remote.total) {
+            if (useParallel && remote.total - downloaded > DownloadFormats.CHUNK_BYTES) {
+                try {
+                    downloaded = SuperDownloader.appendBatch(url, file, downloaded, remote.total, onProgress)
+                    attempts = 0
+                    continue
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: IOException) {
+                    // A server that ignores or rejects parallel ranges still gets a normal transfer.
+                    val committed = file.length() - downloaded
+                    if (committed > 0L) throw e
+                    useParallel = false
+                    Log.w(TAG, "Parallel ranges unavailable; continuing sequentially", e)
+                }
+            }
             try {
                 val reqBuilder = Request.Builder()
                     .url(url)
-                    .header("User-Agent", Net.USER_AGENT)
+                    .header("User-Agent", YouTubeStreamHttp.userAgentForUrl(url))
                     .header("Referer", "https://www.youtube.com/")
 
                 val chunkEnd = if (chunked) DownloadFormats.chunkEnd(downloaded, remote.total, DownloadFormats.CHUNK_BYTES) else null

@@ -12,9 +12,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.annotation.OptIn
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingSimpleBasePlayer
@@ -55,6 +52,19 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import android.media.audiofx.LoudnessEnhancer
+import androidx.compose.runtime.snapshotFlow
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.io.File
+import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator
 import org.schabi.newpipe.extractor.stream.Stream
 import java.io.ByteArrayInputStream
@@ -69,13 +79,23 @@ private val CLOSE_COMMAND = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
 class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
+    private var mediaCache: SimpleCache? = null
+    private var audioBoost: LoudnessEnhancer? = null
+    private val effectsScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var sessionPlayer: SessionPlayer
     private val resolver = MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(2))
 
     override fun onCreate() {
         super.onCreate()
 
-        val sources = YouTubeMediaSourceFactory(this)
+        mediaCache = runCatching {
+            SimpleCache(
+                File(cacheDir, "video-on-demand"),
+                LeastRecentlyUsedCacheEvictor(512L * 1024 * 1024),
+                StandaloneDatabaseProvider(this),
+            )
+        }.onFailure { Log.w("YTXTube", "Playback cache unavailable", it) }.getOrNull()
+        val sources = YouTubeMediaSourceFactory(this, mediaCache)
         val renderers = SyncedRenderersFactory(this).apply { setEnableDecoderFallback(true) }
         val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(sources)
@@ -111,6 +131,18 @@ class PlaybackService : MediaSessionService() {
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build()
+        player.addListener(object : Player.Listener {
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                applyAudioBoost(audioSessionId)
+            }
+        })
+        effectsScope.launch {
+            snapshotFlow { SuperPlayerSettings.skipSilence to SuperPlayerSettings.audioBoost }
+                .collect { (skipSilence, _) ->
+                    player.skipSilenceEnabled = skipSilence
+                    applyAudioBoost(player.audioSessionId)
+                }
+        }
         val openApp = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -187,7 +219,29 @@ class PlaybackService : MediaSessionService() {
     private var networkRecoverer: NetworkRecoverer? = null
     private var sponsorSkipper: SponsorSkipper? = null
 
+    private fun applyAudioBoost(sessionId: Int) {
+        releaseAudioBoost()
+        if (!SuperPlayerSettings.audioBoost || sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        try {
+            val effect = LoudnessEnhancer(sessionId)
+            audioBoost = effect
+            effect.setTargetGain(300)
+            if (effect.setEnabled(true) != android.media.audiofx.AudioEffect.SUCCESS) releaseAudioBoost()
+        } catch (error: RuntimeException) {
+            releaseAudioBoost()
+            Log.w("YTXTube", "Audio boost unavailable for this device or audio output", error)
+        }
+    }
+
+    private fun releaseAudioBoost() {
+        val effect = audioBoost ?: return
+        audioBoost = null
+        runCatching { effect.release() }
+    }
+
     override fun onDestroy() {
+        effectsScope.cancel()
+        releaseAudioBoost()
         resumeSaver?.saveNow()
         sessionPlayer.cancelPendingSkip()
         historyTracker?.release()
@@ -200,6 +254,8 @@ class PlaybackService : MediaSessionService() {
             release()
         }
         session = null
+        mediaCache?.release()
+        mediaCache = null
         resolver.shutdownNow()
         super.onDestroy()
     }
@@ -453,76 +509,6 @@ internal object MediaAudio {
         .setUsage(C.USAGE_MEDIA)
         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
         .build()
-}
-
-object StreamRecovery {
-    var recovering by mutableStateOf<String?>(null)
-        internal set
-
-    var failed by mutableStateOf<Pair<String, String>?>(null)
-        internal set
-
-    val forceProgressiveIds: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
-}
-
-@OptIn(UnstableApi::class)
-private class StreamRecoverer(
-    private val player: ExoPlayer,
-    private val sources: MediaSource.Factory,
-    private val resolver: java.util.concurrent.Executor,
-) : Player.Listener {
-    private val main = Handler(Looper.getMainLooper())
-    private var lastId: String? = null
-    private var retryCount = 0
-
-    override fun onPlaybackStateChanged(playbackState: Int) {
-        if (playbackState == Player.STATE_READY) {
-            retryCount = 0
-        }
-    }
-
-    override fun onPlayerError(error: PlaybackException) {
-        if (error.errorCode != PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) return
-        val item = player.currentMediaItem ?: return
-        if (item.localConfiguration?.uri?.scheme == "file") return
-        val id = item.mediaId
-        val position = player.currentPosition
-        if (id != lastId) {
-            lastId = id
-            retryCount = 0
-        }
-        if (retryCount >= 3) {
-            Log.w("YTXTube", "stream refused after $retryCount attempts for $id at ${position / 1000}s; giving up")
-            return
-        }
-        retryCount++
-        StreamRecovery.forceProgressiveIds.add(id)
-        Log.i("YTXTube", "stream refused for $id (attempt $retryCount); re-extracting and resuming at ${position / 1000}s")
-        StreamRecovery.failed = null
-        StreamRecovery.recovering = id
-        StreamCache.invalidate(id)
-        resolver.execute {
-            val result = runCatching { StreamCache.getOrLoad(id) }
-            main.post {
-                StreamRecovery.recovering = null
-                if (player.currentMediaItem?.mediaId != id || player.playerError == null) return@post
-                result
-                    .onSuccess { resume(item, position) }
-                    .onFailure {
-                        Log.w("YTXTube", "re-extracting $id failed", it)
-                        StreamRecovery.failed = id to YouTube.friendlyError(it)
-                    }
-            }
-        }
-    }
-
-    private fun resume(item: MediaItem, positionMs: Long) {
-        val index = player.currentMediaItemIndex
-        player.addMediaSource(index + 1, sources.createMediaSource(item))
-        player.removeMediaItem(index)
-        player.seekTo(index, positionMs)
-        player.prepare()
-    }
 }
 
 @OptIn(UnstableApi::class)
@@ -802,6 +788,7 @@ internal object YouTubeStreamHttp {
     fun userAgentForUrl(url: String): String {
         val clientParam = Regex("[?&]c=([^&]+)").find(url)?.groupValues?.getOrNull(1)?.uppercase().orEmpty()
         return when {
+            clientParam == "VISIONOS" -> YoutubeParsingHelper.getVisionOsUserAgent(null)
             clientParam.contains("IOS") -> UA_IOS
             clientParam.contains("ANDROID_VR") -> UA_ANDROID_VR
             clientParam.contains("ANDROID") -> UA_ANDROID
@@ -813,14 +800,13 @@ internal object YouTubeStreamHttp {
     fun createDataSourceFactory(context: Context): DataSource.Factory {
         val dynamicOkHttpFactory = object : DataSource.Factory {
             override fun createDataSource(): DataSource {
-                val base = OkHttpDataSource.Factory(Net.client)
-                    .setUserAgent(Net.USER_AGENT)
-                    .createDataSource()
+                val base = OkHttpDataSource.Factory(Net.client).createDataSource()
                 return object : DataSource by base {
                     override fun open(dataSpec: DataSpec): Long {
                         val url = dataSpec.uri.toString()
                         val ua = userAgentForUrl(url)
                         val headers = HashMap(dataSpec.httpRequestHeaders)
+                        headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
                         if (ua == Net.USER_AGENT) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
@@ -843,8 +829,14 @@ internal object YouTubeStreamHttp {
 }
 
 @OptIn(UnstableApi::class)
-private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory {
+private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) : MediaSource.Factory {
     private val dataSourceFactory: DataSource.Factory = YouTubeStreamHttp.createDataSourceFactory(context)
+    private val onDemandDataSourceFactory: DataSource.Factory = cache?.let {
+        CacheDataSource.Factory()
+            .setCache(it)
+            .setUpstreamDataSourceFactory(dataSourceFactory)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    } ?: dataSourceFactory
     private val fallback = DefaultMediaSourceFactory(dataSourceFactory)
 
     override fun setDrmSessionManagerProvider(provider: DrmSessionManagerProvider): MediaSource.Factory =
@@ -865,10 +857,11 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
-        val forceProgressive = mediaItem.mediaId in StreamRecovery.forceProgressiveIds
+        val route = StreamRecovery.routeFor(mediaItem.mediaId)
+        val forceProgressive = route != null
 
-        if (isLive && !hlsUrl.isNullOrBlank()) {
-            Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing live HLS stream from $hlsUrl")
+        if ((isLive || route == StreamRecovery.Route.Hls) && !hlsUrl.isNullOrBlank()) {
+            Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing HLS")
             return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
                 MediaItem.Builder()
                     .setUri(hlsUrl)
@@ -878,6 +871,9 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
             )
         }
         val picked = StreamSelection.pick(info)
+        if (route == StreamRecovery.Route.Muxed && picked.muxed != null) {
+            return source(picked.muxed, info.duration, mediaItem, forceProgressive = true)
+        }
 
         if (picked.video == null && picked.muxed == null && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: no progressive streams, falling back to HLS")
@@ -936,7 +932,7 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
             C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET, null, null, null, null,
             listOf(Period("0", 0, listOf(AdaptationSet(0, C.TRACK_TYPE_VIDEO, representations, emptyList(), emptyList(), emptyList())))),
         )
-        return DashMediaSource.Factory(dataSourceFactory).createMediaSource(manifest, mediaItem)
+        return DashMediaSource.Factory(onDemandDataSourceFactory).createMediaSource(manifest, mediaItem)
     }
 
     private fun source(stream: Stream, durationSec: Long, mediaItem: MediaItem, forceProgressive: Boolean): MediaSource {
@@ -946,12 +942,13 @@ private class YouTubeMediaSourceFactory(context: Context) : MediaSource.Factory 
             val dash = runCatching {
                 val xml = YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(url, itag, durationSec)
                 val manifest = DashManifestParser().parse(Uri.parse(url), ByteArrayInputStream(xml.toByteArray()))
-                DashMediaSource.Factory(dataSourceFactory).createMediaSource(manifest, mediaItem)
+                DashMediaSource.Factory(onDemandDataSourceFactory).createMediaSource(manifest, mediaItem)
             }.getOrNull()
             if (dash != null) return dash
         }
 
-        return ProgressiveMediaSource.Factory(dataSourceFactory)
+        val factory = if (durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
+        return ProgressiveMediaSource.Factory(factory)
             .createMediaSource(mediaItem.buildUpon().setUri(url).build())
     }
 }

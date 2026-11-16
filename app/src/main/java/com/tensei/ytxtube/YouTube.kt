@@ -243,7 +243,7 @@ object YouTube {
         VideoDetails(
             item = VideoItem(
                 id = id,
-                title = info.name,
+                title = DeArrow.title(id) ?: info.name,
                 channel = info.uploaderName.orEmpty(),
                 channelUrl = info.uploaderUrl,
                 thumbnail = sharpenFeedThumbnail(info.thumbnails.bestUrl(), id),
@@ -254,8 +254,8 @@ object YouTube {
                 isLive = isLive,
             ),
             description = info.description?.let { d ->
-                if (d.type == Description.HTML) HtmlCompat.fromHtml(d.content, HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
-                else d.content.trim()
+                if (d.type() == Description.Type.HTML) HtmlCompat.fromHtml(d.content(), HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
+                else d.content().trim()
             }.orEmpty(),
             likes = info.likeCount,
             subscribers = info.uploaderSubscriberCount,

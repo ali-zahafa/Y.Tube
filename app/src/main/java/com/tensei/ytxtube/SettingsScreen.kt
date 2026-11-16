@@ -1312,6 +1312,25 @@ private fun GeneralModificationContent(context: Context) {
         HorizontalDivider(color = c.onSurface.copy(alpha = 0.08f))
 
         SettingsSwitchRow(
+            title = "Skip silence",
+            subtitle = "Skip quiet passages during playback",
+            checked = SuperPlayerSettings.skipSilence,
+            onCheckedChange = SuperPlayerSettings::updateSkipSilence,
+        )
+        SettingsSwitchRow(
+            title = "Audio boost",
+            subtitle = "Raise playback volume by 3 dB on supported devices",
+            checked = SuperPlayerSettings.audioBoost,
+            onCheckedChange = SuperPlayerSettings::updateAudioBoost,
+        )
+        SettingsSwitchRow(
+            title = "DeArrow titles",
+            subtitle = "Use community titles for opened videos when available",
+            checked = SuperPlayerSettings.deArrowTitles,
+            onCheckedChange = SuperPlayerSettings::updateDeArrowTitles,
+        )
+
+        SettingsSwitchRow(
             title = I18n.t("enable_pip", "Picture-in-Picture (PiP)"),
             subtitle = I18n.t("enable_pip_sub", "Allow video to keep playing in a floating window when leaving the app"),
             checked = PipSettings.enabled,
