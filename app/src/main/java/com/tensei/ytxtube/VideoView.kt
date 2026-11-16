@@ -1337,7 +1337,7 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
                     title = "YouTube Web Player (optional)",
                     value = if (state.webPlayerEnabled) "On" else "Off",
                     onClick = {
-                        state.setWebPlayerEnabled(!state.webPlayerEnabled)
+                        state.switchWebPlayer(!state.webPlayerEnabled)
                         onDismiss()
                     }
                 )
