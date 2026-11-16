@@ -324,6 +324,7 @@ class PlayerState(private val scope: CoroutineScope) {
         // "Play in background" belongs to one video only.
         if (backgroundAudioFor != null && backgroundAudioFor != item.id) clearBackgroundAudio()
         if (startPlayback) Net.prewarmMediaConnection()
+        webPlayerEnabled = false
         current = item
         if (isMusicMode) RecentMusic.record(item)
         details = null
@@ -830,6 +831,13 @@ class PlayerState(private val scope: CoroutineScope) {
         private set
 
     private var activeCues by mutableStateOf<List<ParsedCue>>(emptyList())
+    var webPlayerEnabled by mutableStateOf(false)
+        private set
+    fun setWebPlayerEnabled(enabled: Boolean) {
+        if (webPlayerEnabled == enabled) return
+        if (enabled) controller?.pause()
+        webPlayerEnabled = enabled
+    }
     var dualCaptionsEnabled by mutableStateOf(false)
         private set
     var dualTargetLanguage by mutableStateOf("ar")
