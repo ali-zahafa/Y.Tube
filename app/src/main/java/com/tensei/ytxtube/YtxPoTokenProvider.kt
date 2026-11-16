@@ -28,9 +28,4 @@ class YtxPoTokenProvider(private val generator: PoTokenGenerator) : PoTokenProvi
 
     override fun getWebClientPoToken(videoId: String?): PoTokenResult? = resolvePoToken(videoId)
 
-    override fun getWebEmbedClientPoToken(videoId: String?): PoTokenResult? = resolvePoToken(videoId)
-
-    override fun getAndroidClientPoToken(videoId: String?): PoTokenResult? = resolvePoToken(videoId)
-
-    override fun getIosClientPoToken(videoId: String?): PoTokenResult? = resolvePoToken(videoId)
 }

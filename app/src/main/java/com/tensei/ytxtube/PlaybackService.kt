@@ -475,12 +475,6 @@ private class StreamRecoverer(
     private var lastId: String? = null
     private var retryCount = 0
 
-    override fun onPlaybackStateChanged(playbackState: Int) {
-        if (playbackState == Player.STATE_READY) {
-            retryCount = 0
-        }
-    }
-
     override fun onPlayerError(error: PlaybackException) {
         if (error.errorCode != PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) return
         val item = player.currentMediaItem ?: return
