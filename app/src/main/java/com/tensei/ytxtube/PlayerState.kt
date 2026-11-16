@@ -344,6 +344,10 @@ class PlayerState(private val scope: CoroutineScope) {
         inWatchLater = false
         audioOptions = emptyList()
         captionText = null
+        translationJob?.cancel()
+        translatedLines = emptyMap()
+        translatedCaptionText = null
+        translationBusy = false
         speedPanelOpen = false
         videoZoom = 1f
         portraitFullscreen = false
@@ -826,6 +830,59 @@ class PlayerState(private val scope: CoroutineScope) {
         private set
 
     private var activeCues by mutableStateOf<List<ParsedCue>>(emptyList())
+    var dualCaptionsEnabled by mutableStateOf(false)
+        private set
+    var dualTargetLanguage by mutableStateOf("ar")
+        private set
+    var translatedCaptionText by mutableStateOf<String?>(null)
+        private set
+    var translationBusy by mutableStateOf(false)
+        private set
+    private var translationJob: Job? = null
+    private var translatedLines by mutableStateOf<Map<String, String>>(emptyMap())
+
+    fun setDualCaptions(enabled: Boolean, target: String = dualTargetLanguage) {
+        dualCaptionsEnabled = enabled
+        dualTargetLanguage = target
+        translationJob?.cancel()
+        translatedLines = emptyMap()
+        translatedCaptionText = null
+        translationBusy = false
+        if (enabled) {
+            if (selectedSubtitleLanguage == null) setCaptions(true)
+            else translateActiveCues()
+        }
+    }
+
+    private fun translateActiveCues() {
+        translationJob?.cancel()
+        translatedLines = emptyMap()
+        translatedCaptionText = null
+        if (!dualCaptionsEnabled || activeCues.isEmpty()) {
+            translationBusy = false
+            return
+        }
+        val videoId = current?.id ?: return
+        val source = activeCues.map { it.text }.distinct()
+        val language = dualTargetLanguage
+        translationBusy = true
+        translationJob = scope.launch {
+            try {
+                GoogleSubtitleTranslator.translate(source, language) { additions ->
+                    if (current?.id != videoId || !dualCaptionsEnabled || dualTargetLanguage != language) return@translate
+                    translatedLines = translatedLines + additions
+                    translatedCaptionText = captionText?.let(translatedLines::get)
+                }
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                Log.w(TAG, "Subtitle translation unavailable", error)
+            } finally {
+                if (current?.id == videoId && dualTargetLanguage == language) translationBusy = false
+            }
+        }
+    }
+
     private var subtitleFetchJob: kotlinx.coroutines.Job? = null
     private var translatedCaptionVideoId: String? = null
 
@@ -875,6 +932,7 @@ class PlayerState(private val scope: CoroutineScope) {
         activeCues = cues
         val pos = player.currentPosition
         captionText = cues.firstOrNull { pos in it.startMs..it.endMs }?.text
+        translateActiveCues()
     }
 
     fun setSubtitleLanguage(code: String?, trackUrl: String? = null) {
@@ -883,6 +941,10 @@ class PlayerState(private val scope: CoroutineScope) {
         subtitleFetchJob?.cancel()
         activeCues = emptyList()
         captionText = null
+        translationJob?.cancel()
+        translatedLines = emptyMap()
+        translatedCaptionText = null
+        translationBusy = false
         val p = controller
         try {
             if (code == null) {
@@ -920,6 +982,7 @@ class PlayerState(private val scope: CoroutineScope) {
                     activeCues = cues
                     val pos = controller?.currentPosition ?: 0L
                     captionText = cues.firstOrNull { pos in it.startMs..it.endMs }?.text
+                    translateActiveCues()
                 }
             }
         }
@@ -1222,6 +1285,7 @@ class PlayerState(private val scope: CoroutineScope) {
         } else if (selectedSubtitleLanguage == null) {
             captionText = null
         }
+        translatedCaptionText = if (dualCaptionsEnabled) captionText?.let(translatedLines::get) else null
     }
 
     internal val listener = object : Player.Listener {
