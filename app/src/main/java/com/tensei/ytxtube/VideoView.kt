@@ -791,14 +791,21 @@ fun VideoContent(
         }
 
         val captionText = state.captionText
-        if (!scrubbing && captionText != null) {
+        if (!scrubbing && (captionText != null || state.translationBusy && state.dualCaptionsEnabled)) {
             val captionLift by animateDpAsState(
                 targetValue = if (controlsVisible) EdgeScrubTimeRowBottomPad + EdgeScrubTimeRowHeight + 10.dp else 20.dp,
                 animationSpec = if (reduced) tween(0) else tween(200, easing = Motion.Emphasized),
                 label = "captionLift",
             )
             CaptionOverlay(
-                text = captionText,
+                text = buildString {
+                    if (captionText != null) append(captionText)
+                    if (state.dualCaptionsEnabled) {
+                        val translation = state.translatedCaptionText
+                        if (!translation.isNullOrBlank()) append("\n").append(translation)
+                        else if (state.translationBusy && captionText != null) append("\n…")
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 24.dp)
@@ -1324,6 +1331,16 @@ fun PlayerSettingsSheet(state: PlayerState, backdrop: Backdrop, onDismiss: () ->
                     }
                 )
 
+
+                PlayerSettingItem(
+                    icon = Icons.Rounded.PlayCircle,
+                    title = "YouTube Web Player (optional)",
+                    value = if (state.webPlayerEnabled) "On" else "Off",
+                    onClick = {
+                        state.setWebPlayerEnabled(!state.webPlayerEnabled)
+                        onDismiss()
+                    }
+                )
 
                 PlayerSettingItem(
                     icon = Icons.Rounded.Repeat,

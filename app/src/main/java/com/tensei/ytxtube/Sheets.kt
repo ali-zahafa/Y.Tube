@@ -373,6 +373,29 @@ fun SubtitlesSheet(
                 .padding(bottom = 28.dp),
         ) {
             val source = translationSource
+            if (translateOnly && source == null) {
+                TextButton(onClick = {
+                    player.setDualCaptions(!player.dualCaptionsEnabled, player.dualTargetLanguage)
+                    onDismiss()
+                }) {
+                    Text(if (player.dualCaptionsEnabled) "Disable dual subtitles / إيقاف الترجمة المزدوجة"
+                         else "Dual subtitles with Google Translate / ترجمة مزدوجة")
+                }
+                if (player.dualCaptionsEnabled) {
+                    Text("Google Translate web (unofficial) · Original + translated",
+                        color = c.onSurfaceVariant, fontSize = 12.sp)
+                    captionTranslationLanguages.forEach { language ->
+                        val item = LanguageSettings.ALL_LANGUAGES.firstOrNull { it.code == language }
+                        TextButton(onClick = {
+                            player.setDualCaptions(true, language)
+                            onDismiss()
+                        }) {
+                            Text((if (language == player.dualTargetLanguage) "✓ " else "") +
+                                (item?.nativeName ?: language))
+                        }
+                    }
+                }
+            }
             if (translateOnly || choosingSource || source != null) {
                 Text(stringResource(R.string.translate_video), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
                 if (source != null || !translateOnly) {
@@ -410,6 +433,13 @@ fun SubtitlesSheet(
                     }
                 }
                 return@Column
+            }
+            TextButton(onClick = {
+                player.setDualCaptions(!player.dualCaptionsEnabled)
+                onDismiss()
+            }) {
+                Text(if (player.dualCaptionsEnabled) "✓ Dual subtitles (Google Translate)"
+                     else "Enable dual subtitles (Google Translate)")
             }
             Text("Captions / Subtitles", fontFamily = RoundedHeavy, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
             if (translationSources.isNotEmpty()) {
