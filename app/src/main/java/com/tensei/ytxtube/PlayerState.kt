@@ -833,7 +833,7 @@ class PlayerState(private val scope: CoroutineScope) {
     private var activeCues by mutableStateOf<List<ParsedCue>>(emptyList())
     var webPlayerEnabled by mutableStateOf(false)
         private set
-    fun setWebPlayerEnabled(enabled: Boolean) {
+    fun switchWebPlayer(enabled: Boolean) {
         if (webPlayerEnabled == enabled) return
         if (enabled) controller?.pause()
         webPlayerEnabled = enabled
