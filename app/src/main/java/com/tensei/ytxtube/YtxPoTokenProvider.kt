@@ -11,21 +11,25 @@ class YtxPoTokenProvider(private val generator: PoTokenGenerator) : PoTokenProvi
     }
 
     private fun resolvePoToken(videoId: String?): PoTokenResult? {
-        videoId ?: return null
+        if (videoId.isNullOrBlank()) return null
         return try {
-            val sessionId = Account.visitorData() ?: ("guest_" + System.currentTimeMillis())
-            val res = generator.getWebClientPoToken(videoId, sessionId) ?: return null
+            val visitorData = VisitorDataProvider.getOrFetch()
+            if (visitorData.isNullOrBlank()) {
+                Log.w(TAG, "No valid visitorData available; WEB PoToken was not requested")
+                return generator.getWebClientPoToken(videoId, "")
+            }
+
+            val result = generator.getWebClientPoToken(videoId, visitorData) ?: return null
             PoTokenResult(
-                sessionId,
-                res.playerRequestPoToken,
-                res.streamingDataPoToken
+                visitorData,
+                result.playerRequestPoToken,
+                result.streamingDataPoToken,
             )
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to generate PoToken for $videoId: ${e.message}")
+        } catch (error: Exception) {
+            Log.w(TAG, "PoToken provider failed: ${error.javaClass.simpleName}")
             null
         }
     }
 
     override fun getWebClientPoToken(videoId: String?): PoTokenResult? = resolvePoToken(videoId)
-
 }

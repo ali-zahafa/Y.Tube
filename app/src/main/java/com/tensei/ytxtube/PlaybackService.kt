@@ -42,6 +42,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -158,7 +159,7 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
 
-        player.addListener(StreamRecoverer(player, sources, resolver))
+        player.addListener(StreamRecoverer(player, sources, resolver, mediaCache))
         networkRecoverer = NetworkRecoverer(this, player).also(player::addListener)
         resumeSaver = ResumeSaver(player).also(player::addListener)
         historyTracker = WatchHistoryTracker(player)
@@ -800,17 +801,24 @@ internal object YouTubeStreamHttp {
     fun createDataSourceFactory(context: Context): DataSource.Factory {
         val dynamicOkHttpFactory = object : DataSource.Factory {
             override fun createDataSource(): DataSource {
-                val base = OkHttpDataSource.Factory(Net.client).createDataSource()
+                val base = OkHttpDataSource.Factory(Net.mediaClient).createDataSource()
                 return object : DataSource by base {
                     override fun open(dataSpec: DataSpec): Long {
                         val url = dataSpec.uri.toString()
-                        val ua = userAgentForUrl(url)
+                        val metadataUa = Net.mediaUserAgent(url)
+                        val ua = metadataUa ?: userAgentForUrl(url)
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
-                        if (ua == Net.USER_AGENT) {
+                        if (url.contains("googlevideo.com", ignoreCase = true) ||
+                            url.contains("youtube.com", ignoreCase = true)
+                        ) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
                             headers.putIfAbsent("Referer", "https://www.youtube.com/")
+                        }
+                        if (Account.signedIn) {
+                            val cookies = Account.cookieHeader()
+                            if (cookies.isNotBlank()) headers.putIfAbsent("Cookie", cookies)
                         }
                         val updatedSpec = dataSpec.buildUpon()
                             .setHttpRequestHeaders(headers)
@@ -837,7 +845,19 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             .setUpstreamDataSourceFactory(dataSourceFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     } ?: dataSourceFactory
-    private val fallback = DefaultMediaSourceFactory(dataSourceFactory)
+    private val fallback = DefaultMediaSourceFactory(dataSourceFactory).setLoadErrorHandlingPolicy(
+        object : DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                val status = (info.exception as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                if (status == 403 || status == 410) return C.TIME_UNSET
+                return super.getRetryDelayMsFor(info)
+            }
+
+            override fun getMinimumLoadableRetryCount(dataType: Int): Int {
+                return super.getMinimumLoadableRetryCount(dataType)
+            }
+        },
+    )
 
     override fun setDrmSessionManagerProvider(provider: DrmSessionManagerProvider): MediaSource.Factory =
         apply { fallback.setDrmSessionManagerProvider(provider) }
@@ -858,7 +878,8 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
         val route = StreamRecovery.routeFor(mediaItem.mediaId)
-        val forceProgressive = route != null
+        val forceProgressive = route == StreamRecovery.Route.DirectProgressive ||
+            route == StreamRecovery.Route.Muxed
 
         if ((isLive || route == StreamRecovery.Route.Hls) && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing HLS")
@@ -947,7 +968,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             if (dash != null) return dash
         }
 
-        val factory = if (durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
+        val factory = if (!forceProgressive && durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
         return ProgressiveMediaSource.Factory(factory)
             .createMediaSource(mediaItem.buildUpon().setUri(url).build())
     }

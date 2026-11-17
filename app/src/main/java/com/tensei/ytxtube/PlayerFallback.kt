@@ -20,9 +20,38 @@ object PlayerFallback {
     private const val CACHE_MS = 3 * 60 * 1000L
 
 
-    private class Cached(val at: Long, val answer: JSONObject)
-
+    data class SourceMetadata(
+        val clientName: String,
+        val clientVersion: String,
+        val userAgent: String,
+        val visitorData: String?,
+        val poTokenPresent: Boolean,
+    )
+    private class Cached(val at: Long, val answer: JSONObject, val source: SourceMetadata)
     private val cache = ConcurrentHashMap<String, Cached>()
+    private val forcedClients = ConcurrentHashMap.newKeySet<String>()
+    private val sourceMetadata = ConcurrentHashMap<String, SourceMetadata>()
+
+    fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
+    fun invalidate(videoId: String) {
+        cache.remove(videoId); forcedClients.remove(videoId); sourceMetadata.remove(videoId)
+    }
+    fun invalidateAll() { cache.clear(); forcedClients.clear(); sourceMetadata.clear() }
+
+    fun forceClientFallback(videoId: String, clientIndex: Int = 0): Boolean {
+        val clients = fallbackClients()
+        for (index in clientIndex.coerceIn(0, clients.lastIndex)..clients.lastIndex) {
+            val cfg = clients[index]
+            val answer = runCatching { ask(videoId, cfg) }.getOrNull() ?: continue
+            if (!isPlayable(answer)) continue
+            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
+            cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
+            sourceMetadata[videoId] = meta
+            forcedClients.add(videoId)
+            return true
+        }
+        return false
+    }
 
     fun handles(url: String) = "/youtubei/v1/reel/reel_item_watch" in url ||
         "/youtubei/v1/player" in url ||
@@ -40,17 +69,11 @@ object PlayerFallback {
 
 
     fun substitute(url: String, requestBody: ByteArray?, responseText: String?): String? {
-        if (responseText == null || !isBlocked(responseText)) return responseText
-
+        if (responseText == null) return null
         val videoId = videoIdFrom(requestBody) ?: videoIdFromUrl(url) ?: return responseText
-
-        val cached = cache[videoId]
-        val answer = if (cached != null && System.currentTimeMillis() - cached.at < CACHE_MS) {
-            cached.answer
-        } else {
-            fetchFallback(videoId) ?: return responseText
-        }
-
+        val cached = cache[videoId]?.takeIf { System.currentTimeMillis() - it.at < CACHE_MS }
+        if (videoId !in forcedClients && !isBlocked(responseText)) return responseText
+        val answer = cached?.answer ?: fetchFallback(videoId) ?: return responseText
         return when {
             "/reel" in url -> JSONObject().put("playerResponse", answer).toString()
             "/watch" in url -> {
@@ -67,84 +90,33 @@ object PlayerFallback {
     }
 
     private fun fetchFallback(videoId: String): JSONObject? {
-
-
-        if (Account.signedIn) {
-            runCatching { InnerTube.playerResponse(videoId) }
-                .onFailure { Log.w(TAG, "Signed-in WEB fallback failed for $videoId", it) }
-                .getOrNull()
-                ?.takeIf(::isPlayable)
-                ?.let {
-                    Log.i(TAG, "Rescued $videoId with signed-in WEB")
-                    cache[videoId] = Cached(System.currentTimeMillis(), it)
-                    return it
-                }
-        }
-
-
-
-
-        val clients = listOf(
-            ClientConfig(
-                name = "ANDROID_VR",
-                id = "28",
-                version = "1.65.10",
-                userAgent = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-                osName = "Android",
-                osVersion = "12L",
-                deviceMake = "Oculus",
-                deviceModel = "Quest 3",
-                platform = "MOBILE"
-            ),
-            ClientConfig(
-                name = "TVHTML5",
-                id = "7",
-                version = "7.20260213.00.00",
-                userAgent = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15",
-                osName = "Tizen",
-                osVersion = "4.0.0.2",
-                deviceMake = "Samsung",
-                deviceModel = "SmartTV",
-                platform = "TV"
-            ),
-            ClientConfig(
-                name = "WEB_EMBEDDED_PLAYER",
-                id = "56",
-                version = "1.20260213.00.00",
-                userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                osName = "Windows",
-                osVersion = "10.0",
-                deviceMake = "",
-                deviceModel = "",
-                platform = "DESKTOP"
-            ),
-            ClientConfig(
-                name = "IOS",
-                id = "5",
-                version = "21.10.3",
-                userAgent = "com.google.ios.youtube/21.10.3 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
-                osName = "iPhone",
-                osVersion = "18.1.0.22B83",
-                deviceMake = "Apple",
-                deviceModel = "iPhone16,2",
-                platform = "MOBILE"
-            ),
-        )
-
-        for (cfg in clients) {
+        for (cfg in fallbackClients()) {
             val answer = runCatching { ask(videoId, cfg) }
-                .onFailure { Log.w(TAG, "Fallback ${cfg.name} request failed for $videoId", it) }
+                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
                 .getOrNull() ?: continue
-            if (isPlayable(answer)) {
-                Log.i(TAG, "Rescued $videoId with ${cfg.name}")
-                cache[videoId] = Cached(System.currentTimeMillis(), answer)
-                return answer
-            }
-            Log.w(TAG, "Fallback ${cfg.name} had no streams for $videoId " +
-                "(status=${answer.optJSONObject("playabilityStatus")?.optString("status")})")
+            if (!isPlayable(answer)) continue
+            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
+            cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
+            sourceMetadata[videoId] = meta
+            return answer
         }
         return null
     }
+
+    private fun fallbackClients(): List<ClientConfig> = listOf(
+        ClientConfig("ANDROID_VR", "28", "1.65.10",
+            "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+            "Android", "12L", "Oculus", "Quest 3", "MOBILE"),
+        ClientConfig("TVHTML5", "7", "7.20260213.00.00",
+            "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15",
+            "Tizen", "4.0.0.2", "Samsung", "SmartTV", "TV"),
+        ClientConfig("IOS", "5", "21.10.3",
+            "com.google.ios.youtube/21.10.3 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
+            "iPhone", "18.1.0.22B83", "Apple", "iPhone16,2", "MOBILE"),
+        ClientConfig("WEB_EMBEDDED_PLAYER", "56", "1.20260213.00.00",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Windows", "10.0", "", "", "DESKTOP"),
+    )
 
     private fun videoIdFrom(requestBody: ByteArray?): String? {
         if (requestBody == null) return null
@@ -220,7 +192,7 @@ object PlayerFallback {
             .put("osVersion", cfg.osVersion)
             .put("hl", "en")
             .put("gl", "US")
-        Account.visitorData()?.takeIf { it.isNotBlank() }?.let { client.put("visitorData", it) }
+        VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }?.let { client.put("visitorData", it) }
 
         val body = JSONObject()
             .put("context", JSONObject().put("client", client))
@@ -228,6 +200,8 @@ object PlayerFallback {
             .put("contentCheckOk", true)
             .put("racyCheckOk", true)
             .apply {
+                val cookies = Account.cookieHeader()
+                if (cookies.isNotBlank()) header("Cookie", cookies)
                 if (cfg.name == "WEB_EMBEDDED_PLAYER") {
                     put("thirdPartyEmbedUrl", "https://www.youtube.com/embed/$videoId")
                 }
