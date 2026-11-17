@@ -90,8 +90,7 @@ internal class StreamRecoverer(
                     }
                     3 -> {
                         StreamCache.invalidate(id)
-                        check(PlayerFallback.forceClientFallback(id, 0)) { "ANDROID_VR fallback unavailable" }
-                        val info = StreamCache.getOrLoad(id, forceClientFallback = true)
+                        val info = StreamCache.getOrLoad(id, forceClientFallback = true, fallbackClientIndex = 0)
                         StreamRecovery.setRoute(
                             id,
                             if (!info.hlsUrl.isNullOrBlank()) StreamRecovery.Route.Hls
