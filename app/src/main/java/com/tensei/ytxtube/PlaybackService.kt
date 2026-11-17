@@ -80,6 +80,7 @@ private val CLOSE_COMMAND = SessionCommand(ACTION_CLOSE, Bundle.EMPTY)
 class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
+    private var streamRecoverer: StreamRecoverer? = null
     private var mediaCache: SimpleCache? = null
     private var audioBoost: LoudnessEnhancer? = null
     private val effectsScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -159,7 +160,7 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
 
-        player.addListener(StreamRecoverer(player, sources, resolver, mediaCache))
+        streamRecoverer = StreamRecoverer(player, sources, resolver, mediaCache).also(player::addListener)
         networkRecoverer = NetworkRecoverer(this, player).also(player::addListener)
         resumeSaver = ResumeSaver(player).also(player::addListener)
         historyTracker = WatchHistoryTracker(player)
@@ -241,6 +242,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        streamRecoverer?.release()
+        streamRecoverer = null
         effectsScope.cancel()
         releaseAudioBoost()
         resumeSaver?.saveNow()
@@ -898,6 +901,9 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             if (direct.muxedUrl == null && (direct.videoUrl == null || direct.audioUrl == null) && hls != null) {
                 return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
             }
+            // Prefer the complete progressive stream when offered. A valid muxed
+            // URL should not be hidden by a failing adaptive video/audio pair.
+            if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem)
             if (direct.videoUrl != null && direct.audioUrl != null) {
                 return MergingMediaSource(
                     true,
@@ -906,7 +912,6 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
                     directSource(direct.audioUrl, mediaItem),
                 )
             }
-            if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem)
             if (hls != null) return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
         }
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)

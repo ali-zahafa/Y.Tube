@@ -258,6 +258,7 @@ class PlayerState(private val scope: CoroutineScope) {
         private set
 
     fun open(item: VideoItem, expand: Boolean = true) {
+        if (WebPlaybackSession.videoId != item.id) WebPlaybackSession.stop()
         isMusicMode = false
         AudioOnly.set(false)
         runCatching { applyVideoTrack() }
@@ -839,7 +840,12 @@ class PlayerState(private val scope: CoroutineScope) {
     fun switchWebPlayer(enabled: Boolean) {
         if (webPlayerEnabled == enabled) return
         if (enabled) controller?.pause()
+        else WebPlaybackSession.stop()
         webPlayerEnabled = enabled
+    }
+    fun hideWebPlayerForBackground() {
+        controller?.pause()
+        webPlayerEnabled = false
     }
     var dualCaptionsEnabled by mutableStateOf(false)
         private set
@@ -1027,6 +1033,7 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun play() {
+        WebPlaybackSession.stop()
         val player = controller ?: return
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
@@ -1223,6 +1230,8 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun close() {
+        WebPlaybackSession.stop()
+        webPlayerEnabled = false
         clearBackgroundAudio()
         loadJob?.cancel()
         controller?.run { stop(); clearMediaItems() }
