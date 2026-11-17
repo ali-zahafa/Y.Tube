@@ -455,66 +455,72 @@ object StreamCache {
     private const val MAX_AGE_MS = 4 * 60 * 60 * 1000L
     private class Entry(val info: StreamInfo, val loadedAt: Long)
     private val entries = ConcurrentHashMap<String, Entry>()
+    private val inflight = ConcurrentHashMap<String, FutureTask<StreamInfo>>()
+    private val prefetcher = Executors.newFixedThreadPool(4)
 
-    
+    fun invalidate(id: String) {
+        entries.remove(id)
+        PlayerFallback.invalidate(id)
+        inflight.remove(id)?.cancel(false)
+    }
 
-
-
-    fun invalidate(id: String) { entries.remove(id) }
-
-
-    fun invalidateAll() = entries.clear()
+    fun invalidateAll() {
+        entries.clear()
+        inflight.values.forEach { it.cancel(false) }
+        inflight.clear()
+        PlayerFallback.invalidateAll()
+    }
 
     fun get(id: String): StreamInfo? =
         entries[id]?.takeIf { System.currentTimeMillis() - it.loadedAt < MAX_AGE_MS }?.info
 
-    
+    fun getOrLoad(id: String, forceClientFallback: Boolean = false): StreamInfo {
+        if (!forceClientFallback) get(id)?.let { return it }
 
-
-
-    private val inflight = ConcurrentHashMap<String, FutureTask<StreamInfo>>()
-
-    fun getOrLoad(id: String): StreamInfo {
-        get(id)?.let { return it }
-        val mine = FutureTask {
-            try {
-                StreamInfo.getInfo(ServiceList.YouTube, YouTube.watchUrl(id)).also {
-                    entries[id] = Entry(it, System.currentTimeMillis())
-                    Net.noteMediaHost(StreamSelection.pick(it).let { p -> (p.video ?: p.muxed)?.content })
-                    CaptionTracks.put(id, CaptionTracks.fromStreamInfo(it))
-                    if (it.subtitles.isEmpty()) runCatching { CaptionTracks.load(id) }
-                }
-            } catch (t: Throwable) {
-                if (t is org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException) {
-
-                    entries.remove(id)
-                    StreamInfo.getInfo(ServiceList.YouTube, YouTube.watchUrl(id)).also {
-                        entries[id] = Entry(it, System.currentTimeMillis())
-                        Net.noteMediaHost(StreamSelection.pick(it).let { p -> (p.video ?: p.muxed)?.content })
-                        CaptionTracks.put(id, CaptionTracks.fromStreamInfo(it))
-                        if (it.subtitles.isEmpty()) runCatching { CaptionTracks.load(id) }
-                    }
-                } else throw t
+        if (forceClientFallback) {
+            entries.remove(id)
+            inflight.remove(id)?.cancel(false)
+            check(PlayerFallback.forceClientFallback(id)) {
+                "No playable stream was returned by ANDROID_VR, TVHTML5, iOS, or WEB fallback"
             }
         }
+
+        val mine = FutureTask {
+            fun extract(): StreamInfo = StreamInfo.getInfo(ServiceList.YouTube, YouTube.watchUrl(id))
+
+            val info = try {
+                extract()
+            } catch (first: Throwable) {
+                if (forceClientFallback || !PlayerFallback.forceClientFallback(id)) throw first
+                try {
+                    extract()
+                } catch (fallbackError: Throwable) {
+                    fallbackError.addSuppressed(first)
+                    throw fallbackError
+                }
+            }
+
+            entries[id] = Entry(info, System.currentTimeMillis())
+            val picked = StreamSelection.pick(info)
+            Net.noteMediaHost((picked.video ?: picked.muxed)?.content)
+            val metadata = PlayerFallback.metadata(id)
+            listOfNotNull(picked.video?.content, picked.muxed?.content, picked.audio?.content)
+                .forEach { url -> metadata?.let { Net.registerMediaUserAgent(url, it.userAgent) } }
+            CaptionTracks.put(id, CaptionTracks.fromStreamInfo(info))
+            if (info.subtitles.isEmpty()) runCatching { CaptionTracks.load(id) }
+            info
+        }
+
         val running = inflight.putIfAbsent(id, mine)
         val task = running ?: mine.also { it.run() }
-        try {
-            return task.get()
-        } catch (e: ExecutionException) {
-            throw e.cause ?: e
+        return try {
+            task.get()
+        } catch (error: ExecutionException) {
+            throw error.cause ?: error
         } finally {
             if (running == null) inflight.remove(id, mine)
         }
     }
-
-
-    /**
-     * Shorts and the next-up queue can resolve several videos at once; a single prefetch thread
-     * used to make the tapped video wait behind an unrelated prefetch. Four lanes keep the
-     * critical one moving without hammering YouTube.
-     */
-    private val prefetcher = Executors.newFixedThreadPool(4)
 
     fun prefetch(id: String) {
         if (get(id) != null || inflight.containsKey(id)) return
@@ -525,7 +531,6 @@ object StreamCache {
         ids.forEach(::prefetch)
     }
 }
-
 
 
 

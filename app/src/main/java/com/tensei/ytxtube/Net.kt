@@ -32,11 +32,15 @@ object Net {
 
 
     val mediaClient: OkHttpClient by lazy {
-        client.newBuilder().dns(Dns { hostname ->
-            val addresses = Dns.SYSTEM.lookup(hostname)
-            if (hostname.equals("googlevideo.com", true) || hostname.endsWith(".googlevideo.com", true)) {
-                addresses.sortedBy { if (it is Inet4Address) 0 else 1 }
-            } else addresses
+        client.newBuilder().dns(object : Dns {
+            override fun lookup(hostname: String): List<java.net.InetAddress> {
+                val addresses = Dns.SYSTEM.lookup(hostname)
+                return if (hostname.equals("googlevideo.com", true) ||
+                    hostname.endsWith(".googlevideo.com", true)
+                ) {
+                    addresses.sortedBy { if (it is Inet4Address) 0 else 1 }
+                } else addresses
+            }
         }).build()
     }
 
