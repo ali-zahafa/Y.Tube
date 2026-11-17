@@ -13,9 +13,11 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 
 object StreamRecovery {
-    @Volatile var recovering: String? = null
+    // Compose-observable state is required here: PlayerState observes recovery completion
+    // to switch to the website player when every direct-stream route has failed.
+    var recovering: String? by androidx.compose.runtime.mutableStateOf(null)
         internal set
-    @Volatile var failed: Pair<String, String>? = null
+    var failed: Pair<String, String>? by androidx.compose.runtime.mutableStateOf(null)
         internal set
 
     internal enum class Route { DirectProgressive, Muxed, Hls }
