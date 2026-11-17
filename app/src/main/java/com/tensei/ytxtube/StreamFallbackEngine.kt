@@ -50,7 +50,9 @@ internal class StreamRecoverer(
 
     override fun onPlayerError(error: PlaybackException) {
         val status = httpStatus(error) ?: return
-        if (status != 403 && status != 410) return
+        if (status !in setOf(400, 403, 404, 410) &&
+            error.errorCode != PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED &&
+            error.errorCode != PlaybackException.ERROR_CODE_IO_UNSPECIFIED) return
         val item = player.currentMediaItem ?: return
         if (item.localConfiguration?.uri?.scheme == "file") return
         val id = item.mediaId
@@ -77,6 +79,7 @@ internal class StreamRecoverer(
             val result = runCatching {
                 when (stage) {
                     1 -> {
+                        evictFailedCache(id)
                         StreamCache.invalidate(id)
                         VisitorDataProvider.invalidate()
                         kotlinx.coroutines.runBlocking { YTXTubeApplication.poTokenGenerator.invalidate() }
@@ -99,8 +102,7 @@ internal class StreamRecoverer(
                     }
                     else -> {
                         StreamCache.invalidate(id)
-                        check(PlayerFallback.forceClientFallback(id, 1)) { "TVHTML5 fallback unavailable" }
-                        val info = StreamCache.getOrLoad(id, forceClientFallback = true, fallbackClientIndex = 1)
+                        val info = StreamCache.getOrLoad(id, forceClientFallback = true, fallbackClientIndex = stage - 3)
                         StreamRecovery.setRoute(
                             id,
                             if (!info.hlsUrl.isNullOrBlank()) StreamRecovery.Route.Hls
@@ -131,17 +133,20 @@ internal class StreamRecoverer(
         }
     }
 
+    private fun evictFailedCache(id: String) {
+        StreamCache.get(id)?.let { info ->
+            val picked = StreamSelection.pick(info)
+            listOfNotNull(picked.video?.content, picked.muxed?.content, picked.audio?.content)
+                .forEach { url -> runCatching { cache?.removeResource(url) } }
+        }
+    }
+
     private fun resume(item: MediaItem, positionMs: Long, playWhenReady: Boolean) {
         val index = player.currentMediaItemIndex
         if (index < 0) {
             activeRecovery = false
             StreamRecovery.recovering = null
             return
-        }
-        StreamCache.get(item.mediaId)?.let { info ->
-            val picked = StreamSelection.pick(info)
-            listOfNotNull(picked.video?.content, picked.muxed?.content, picked.audio?.content)
-                .forEach { url -> runCatching { cache?.removeResource(url) } }
         }
         player.addMediaSource(index + 1, sources.createMediaSource(item))
         player.removeMediaItem(index)
@@ -167,6 +172,6 @@ internal class StreamRecoverer(
 
     private companion object {
         const val TAG = "YTXTubeRecovery"
-        const val MAX_ATTEMPTS = 4
+        const val MAX_ATTEMPTS = 6
     }
 }
