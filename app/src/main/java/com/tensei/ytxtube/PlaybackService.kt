@@ -105,7 +105,7 @@ class PlaybackService : MediaSessionService() {
                 DefaultTrackSelector(
                     this,
                     AdaptiveTrackSelection.Factory(
-                        2_000,
+                        10_000,
                         25_000,
                         25_000,
                         0.75f,
@@ -114,14 +114,14 @@ class PlaybackService : MediaSessionService() {
                     setParameters(
                         buildUponParameters()
                             .setAllowVideoMixedDecoderSupportAdaptiveness(true)
-                            .setAllowVideoNonSeamlessAdaptiveness(true),
+                            .setAllowVideoNonSeamlessAdaptiveness(false),
                     )
                 },
             )
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, 64 * 1024))
-                    .setBufferDurationsMs(2_500, 30_000, 250, 2_000)
+                    .setBufferDurationsMs(15_000, 50_000, 1_500, 3_000)
                     .setBackBuffer(10_000, false)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build(),
@@ -818,7 +818,10 @@ internal object YouTubeStreamHttp {
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
-                        if (ua == Net.USER_AGENT) {
+                        val clientName = Uri.parse(url).getQueryParameter("c")?.uppercase().orEmpty()
+                        val isWebClient = clientName == "WEB" || clientName == "MWEB" ||
+                            clientName == "WEB_EMBEDDED_PLAYER" || (clientName.isBlank() && ua == Net.USER_AGENT)
+                        if (isWebClient) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
                             headers.putIfAbsent("Referer", "https://www.youtube.com/")
                         }
