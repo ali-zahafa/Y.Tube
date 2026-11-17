@@ -78,7 +78,7 @@ class YouTubePlaybackValidationTest {
                     main {
                         route = if (state!!.webPlayerEnabled) "web" else "native"
                         observedPosition = state!!.positionMs
-                        playing = state!!.isPlaying
+                        playing = state!!.isPlaying && state!!.controller?.currentMediaItem?.mediaId == id
                         if (route == "web") view = WebPlaybackSession.view
                     }
                     view?.let { web ->
@@ -86,18 +86,20 @@ class YouTubePlaybackValidationTest {
                         evaluate(web, "Array.from(document.querySelectorAll('button')).filter(b=>/^(Reject all|رفض الكل)$/i.test((b.innerText||'').trim())).forEach(b=>b.click());")
                         val raw = evaluate(web, """
                             (function(){const v=document.querySelector('video'); const p=document.getElementById('movie_player')||document.querySelector('.html5-video-player');
+                            const data=p&&typeof p.getVideoData==='function'?p.getVideoData():null;
+                            const activeId=data?.video_id||new URLSearchParams(location.search).get('v')||'';
                             const ad=!!p&&(p.classList.contains('ad-showing')||p.classList.contains('ad-interrupting'));
                             const e=document.querySelector('.ytp-error-content-wrap,.ytm-player-error-message-renderer');
                             const b=Array.from(document.querySelectorAll('button')).find(x=>/^play( video)?$/i.test(x.getAttribute('aria-label')||''));
                             const r=(b||v)?.getBoundingClientRect();
-                            return JSON.stringify({t:v?.currentTime||0,playing:!!v&&!v.paused&&!v.ended&&v.videoWidth>0,ad:ad,
+                            return JSON.stringify({id:activeId,t:v?.currentTime||0,playing:!!v&&!v.paused&&!v.ended&&v.videoWidth>0,ad:ad,
                             error:(e?.innerText||(!v?document.body?.innerText:'')||'').slice(0,240),scale:window.devicePixelRatio||1,x:r?r.x+r.width/2:0,y:r?r.y+r.height/2:0});})();
                         """.trimIndent())
                         val decoded = raw?.let { runCatching { JSONTokener(it).nextValue() as? String }.getOrNull() }
                         val page = decoded?.let { runCatching { JSONObject(it) }.getOrNull() }
                         if (page != null) {
                             observedPosition = (page.optDouble("t") * 1000).toLong()
-                            playing = page.optBoolean("playing") && !page.optBoolean("ad")
+                            playing = page.optBoolean("playing") && !page.optBoolean("ad") && page.optString("id") == id
                             webError = page.optString("error")
                             if (!page.optBoolean("playing") && SystemClock.elapsedRealtime() - lastPlayRequest > 6000) {
                                 main { playWebVideo(web) { webPlayError = it.orEmpty() } }
