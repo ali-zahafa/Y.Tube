@@ -67,11 +67,7 @@ internal fun YouTubeWebPlayerDialog(videoId: String, startPositionMs: Long = 0, 
                     WebPlaybackSession.stop()
                     WebPlaybackSession.destroy()
                 }
-                WebPlaybackSession.view ?: object : WebView(context.applicationContext) {
-                    override fun onWindowVisibilityChanged(visibility: Int) {
-                        super.onWindowVisibilityChanged(if (WebPlaybackSession.background) View.VISIBLE else visibility)
-                    }
-                }.apply {
+                WebPlaybackSession.view ?: BackgroundPlaybackWebView(context.applicationContext).apply {
                     WebPlaybackSession.view = this
                     WebPlaybackSession.videoId = videoId
                     settings.javaScriptEnabled = true
@@ -139,27 +135,14 @@ internal fun YouTubeWebPlayerDialog(videoId: String, startPositionMs: Long = 0, 
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    // Start only after the page confirms that an actual media element is playing.
-                    view.evaluateJavascript("(function(){const v=document.querySelector('video'); return !!v && !v.paused && !v.ended && v.readyState >= 2;})()") { result ->
-                        if (result != "true") {
-                            pageError = "Start the video on the page first, then tap Background playback."
-                        } else {
-                            view.evaluateJavascript(BACKGROUND_MODE_SCRIPT, null)
-                            WebPlaybackSession.background = true
-                            runCatching {
-                                androidx.core.content.ContextCompat.startForegroundService(context,
-                                    android.content.Intent(context, WebPlaybackService::class.java))
-                            }.onSuccess {
-                                fullscreenCallback?.onCustomViewHidden()
-                                fullscreenView = null
-                                onBackground()
-                            }.onFailure {
-                                WebPlaybackSession.background = false
-                                view.evaluateJavascript("window.__ytubeBackground = false;", null)
-                                pageError = "Could not start background playback. Keep the player open and try again."
-                            }
-                        }
-                    }
+                    startWebBackground(context, view,
+                        onStarted = {
+                            fullscreenCallback?.onCustomViewHidden()
+                            fullscreenView = null
+                            onBackground()
+                        },
+                        onError = { pageError = it },
+                    )
                 }) { Text("Background playback") }
                 if (WebPlaybackSession.background) {
                     Button(onClick = { WebPlaybackSession.stop(); onClose() }) { Text("Stop background") }
@@ -256,6 +239,34 @@ private class BackgroundWebViewClient : WebViewClient() {
     override fun onPageFinished(view: WebView?, url: String?) {
         if (WebPlaybackSession.background && url?.startsWith("https://m.youtube.com/") == true) {
             view?.evaluateJavascript(BACKGROUND_MODE_SCRIPT, null)
+        }
+    }
+}
+
+
+/** Shared by the button and on-device regression tests; success requires playing media. */
+internal fun startWebBackground(
+    context: android.content.Context,
+    view: WebView,
+    onStarted: () -> Unit,
+    onError: (String) -> Unit,
+) {
+    view.evaluateJavascript("(function(){const v=document.querySelector('video'); return !!v && !v.paused && !v.ended && v.readyState >= 2;})()") { result ->
+        if (result != "true") {
+            onError("Start the video on the page first, then tap Background playback.")
+        } else if (WebPlaybackSession.view !== view) {
+            onError("This web player has already closed. Open it and try again.")
+        } else {
+            view.evaluateJavascript(BACKGROUND_MODE_SCRIPT, null)
+            WebPlaybackSession.background = true
+            runCatching {
+                androidx.core.content.ContextCompat.startForegroundService(context,
+                    android.content.Intent(context, WebPlaybackService::class.java))
+            }.onSuccess { onStarted() }.onFailure {
+                WebPlaybackSession.background = false
+                view.evaluateJavascript("window.__ytubeBackground = false;", null)
+                onError("Could not start background playback. Keep the player open and try again.")
+            }
         }
     }
 }

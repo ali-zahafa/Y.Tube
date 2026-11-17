@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.*
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 
@@ -167,5 +168,12 @@ class WebPlaybackService : Service() {
     private companion object {
         const val ID = 2353
         const val CHANNEL = "web-playback"
+    }
+}
+
+
+internal class BackgroundPlaybackWebView(context: Context) : WebView(context) {
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(if (WebPlaybackSession.background) View.VISIBLE else visibility)
     }
 }

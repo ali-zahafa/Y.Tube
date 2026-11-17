@@ -11,6 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "com.tensei.ytxtube"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 34
         versionCode = 252
@@ -152,6 +153,9 @@ dependencies {
     implementation("com.google.guava:guava:33.3.1-android")
 
 
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }
