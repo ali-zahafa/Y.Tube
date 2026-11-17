@@ -787,6 +787,7 @@ internal object YouTubeStreamHttp {
     private const val UA_TV = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15"
 
     fun userAgentForUrl(url: String): String {
+        Net.mediaUserAgent(url)?.let { return it }
         val parsed = Uri.parse(url)
         val clientParam = parsed.getQueryParameter("c").orEmpty().uppercase()
         val clientVersion = parsed.getQueryParameter("cver")?.takeIf { it.isNotBlank() }
@@ -809,11 +810,11 @@ internal object YouTubeStreamHttp {
     fun createDataSourceFactory(context: Context): DataSource.Factory {
         val dynamicOkHttpFactory = object : DataSource.Factory {
             override fun createDataSource(): DataSource {
-                val base = OkHttpDataSource.Factory(Net.client).createDataSource()
+                val base = OkHttpDataSource.Factory(Net.mediaClient).createDataSource()
                 return object : DataSource by base {
                     override fun open(dataSpec: DataSpec): Long {
                         val url = dataSpec.uri.toString()
-                        val ua = userAgentForUrl(url)
+                        val ua = Net.mediaUserAgent(url) ?: userAgentForUrl(url)
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
@@ -821,10 +822,24 @@ internal object YouTubeStreamHttp {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
                             headers.putIfAbsent("Referer", "https://www.youtube.com/")
                         }
+                        val cookies = if (Account.signedIn) Account.cookieHeader() else ""
+                        if (cookies.isNotBlank()) {
+                            headers.keys.removeAll { it.equals("Cookie", ignoreCase = true) }
+                            headers["Cookie"] = cookies
+                        }
                         val updatedSpec = dataSpec.buildUpon()
                             .setHttpRequestHeaders(headers)
                             .build()
-                        return base.open(updatedSpec)
+                        try {
+                            return base.open(updatedSpec)
+                        } catch (error: HttpDataSource.InvalidResponseCodeException) {
+                            val parsed = Uri.parse(url)
+                            Log.e(
+                                "YTXTubeHTTP",
+                                "Media HTTP ${error.responseCode}; host=${parsed.host}; client=${parsed.getQueryParameter("c") ?: "mapped"}; cver=${parsed.getQueryParameter("cver") ?: "mapped"}; itag=${parsed.getQueryParameter("itag") ?: "?"}; range=${dataSpec.position}+${dataSpec.length}",
+                            )
+                            throw error
+                        }
                     }
 
                     override fun addTransferListener(transferListener: TransferListener) {
@@ -875,8 +890,6 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
         val route = StreamRecovery.routeFor(mediaItem.mediaId)
-        val forceProgressive = route != null
-
         if ((isLive || route == StreamRecovery.Route.Hls) && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing HLS")
             return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
@@ -889,7 +902,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         }
         val picked = StreamSelection.pick(info)
         if (route == StreamRecovery.Route.Muxed && picked.muxed != null) {
-            return source(picked.muxed, info.duration, mediaItem, forceProgressive = true)
+            return source(picked.muxed, info.duration, mediaItem)
         }
 
         if (picked.video == null && picked.muxed == null && !hlsUrl.isNullOrBlank()) {
@@ -903,23 +916,18 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             )
         }
 
-        if (!forceProgressive && QualityPreference.height == null && picked.audio != null) {
-            val adaptive = adaptiveVideo(info, mediaItem)
-            if (adaptive != null) {
-                Log.i("YTXTube", "media source ${mediaItem.mediaId}: adaptive video up to ${NetworkSpeed.linkHeight()}p + audio itag ${picked.audio.itag}")
-                return MergingMediaSource(true, true, adaptive, source(picked.audio, info.duration, mediaItem, false))
-            }
-        }
+        // YouTube progressive URLs are complete media files, not stable DASH segment bases.
+        // Synthetic byte-range DASH manifests caused mid-stream HTTP 403 responses.
         val video = picked.video
         val audio = picked.audio
         return when {
             video != null && audio != null -> MergingMediaSource(
                 true,
                 true,
-                source(video, info.duration, mediaItem, forceProgressive),
-                source(audio, info.duration, mediaItem, forceProgressive),
+                source(video, info.duration, mediaItem),
+                source(audio, info.duration, mediaItem),
             )
-            picked.muxed != null -> source(picked.muxed, info.duration, mediaItem, forceProgressive)
+            picked.muxed != null -> source(picked.muxed, info.duration, mediaItem)
             !hlsUrl.isNullOrBlank() -> HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
                 MediaItem.Builder()
                     .setUri(hlsUrl)
@@ -931,41 +939,9 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         }
     }
 
-    private fun adaptiveVideo(info: org.schabi.newpipe.extractor.stream.StreamInfo, mediaItem: MediaItem): MediaSource? {
-        val durationSec = info.duration.takeIf { it > 0 } ?: return null
-        val maxTier = NetworkSpeed.linkHeight()
-        val ladder = StreamSelection.autoLadder(info, maxTier)
-        val manifests = ladder.mapNotNull { stream ->
-            runCatching {
-                val xml = YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(stream.content, stream.itagItem!!, durationSec)
-                DashManifestParser().parse(Uri.parse(stream.content), ByteArrayInputStream(xml.toByteArray()))
-            }.getOrNull()
-        }
-        if (manifests.size < 2) return null
-        val representations = manifests.map { it.getPeriod(0).adaptationSets[0].representations[0] }
-        val base = manifests.first()
-        val manifest = DashManifest(
-            base.availabilityStartTimeMs, base.durationMs, base.minBufferTimeMs, false,
-            C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET, C.TIME_UNSET, null, null, null, null,
-            listOf(Period("0", 0, listOf(AdaptationSet(0, C.TRACK_TYPE_VIDEO, representations, emptyList(), emptyList(), emptyList())))),
-        )
-        return DashMediaSource.Factory(onDemandDataSourceFactory).createMediaSource(manifest, mediaItem)
-    }
-
-    private fun source(stream: Stream, durationSec: Long, mediaItem: MediaItem, forceProgressive: Boolean): MediaSource {
-        val url = stream.content
-        val itag = stream.itagItem
-        if (!forceProgressive && itag != null && durationSec > 0) {
-            val dash = runCatching {
-                val xml = YoutubeProgressiveDashManifestCreator.fromProgressiveStreamingUrl(url, itag, durationSec)
-                val manifest = DashManifestParser().parse(Uri.parse(url), ByteArrayInputStream(xml.toByteArray()))
-                DashMediaSource.Factory(onDemandDataSourceFactory).createMediaSource(manifest, mediaItem)
-            }.getOrNull()
-            if (dash != null) return dash
-        }
-
+    private fun source(stream: Stream, durationSec: Long, mediaItem: MediaItem): MediaSource {
         val factory = if (durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
         return ProgressiveMediaSource.Factory(factory)
-            .createMediaSource(mediaItem.buildUpon().setUri(url).build())
+            .createMediaSource(mediaItem.buildUpon().setUri(stream.content).build())
     }
 }
