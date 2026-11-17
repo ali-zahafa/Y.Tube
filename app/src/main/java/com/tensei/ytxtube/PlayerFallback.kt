@@ -31,24 +31,33 @@ object PlayerFallback {
     private val cache = ConcurrentHashMap<String, Cached>()
     private val forcedClients = ConcurrentHashMap.newKeySet<String>()
     private val sourceMetadata = ConcurrentHashMap<String, SourceMetadata>()
+    private val cacheGenerations = StreamCacheGeneration()
 
     fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
     fun invalidate(videoId: String) {
+        cacheGenerations.invalidate(videoId)
         cache.remove(videoId); forcedClients.remove(videoId); sourceMetadata.remove(videoId)
     }
-    fun invalidateAll() { cache.clear(); forcedClients.clear(); sourceMetadata.clear() }
+    fun invalidateAll() {
+        cacheGenerations.invalidateAll()
+        cache.clear(); forcedClients.clear(); sourceMetadata.clear()
+    }
 
     fun forceClientFallback(videoId: String, clientIndex: Int = 0): Boolean {
+        val token = cacheGenerations.snapshot(videoId)
         val clients = fallbackClients()
         for (index in clientIndex.coerceIn(0, clients.lastIndex)..clients.lastIndex) {
             val cfg = clients[index]
             val answer = runCatching { ask(videoId, cfg) }.getOrNull() ?: continue
             if (!isPlayable(answer)) continue
             val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
-            cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
-            sourceMetadata[videoId] = meta
-            forcedClients.add(videoId)
-            return true
+            val published = cacheGenerations.publishIfCurrent(videoId, token) {
+                cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
+                sourceMetadata[videoId] = meta
+                forcedClients.add(videoId)
+            }
+            if (published) return true
+            return false
         }
         return false
     }
@@ -90,15 +99,19 @@ object PlayerFallback {
     }
 
     private fun fetchFallback(videoId: String): JSONObject? {
+        val token = cacheGenerations.snapshot(videoId)
         for (cfg in fallbackClients()) {
             val answer = runCatching { ask(videoId, cfg) }
                 .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
                 .getOrNull() ?: continue
             if (!isPlayable(answer)) continue
             val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
-            cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
-            sourceMetadata[videoId] = meta
-            return answer
+            val published = cacheGenerations.publishIfCurrent(videoId, token) {
+                cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
+                sourceMetadata[videoId] = meta
+            }
+            if (published) return answer
+            return null
         }
         return null
     }
