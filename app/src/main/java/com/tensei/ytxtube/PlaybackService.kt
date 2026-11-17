@@ -42,7 +42,6 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
-import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -159,7 +158,7 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
 
-        player.addListener(StreamRecoverer(player, sources, resolver, mediaCache))
+        player.addListener(StreamRecoverer(player, sources, resolver))
         networkRecoverer = NetworkRecoverer(this, player).also(player::addListener)
         resumeSaver = ResumeSaver(player).also(player::addListener)
         historyTracker = WatchHistoryTracker(player)
@@ -787,12 +786,20 @@ internal object YouTubeStreamHttp {
     private const val UA_TV = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15"
 
     fun userAgentForUrl(url: String): String {
-        val clientParam = Regex("[?&]c=([^&]+)").find(url)?.groupValues?.getOrNull(1)?.uppercase().orEmpty()
+        val parsed = Uri.parse(url)
+        val clientParam = parsed.getQueryParameter("c").orEmpty().uppercase()
+        val clientVersion = parsed.getQueryParameter("cver")?.takeIf { it.isNotBlank() }
         return when {
             clientParam == "VISIONOS" -> YoutubeParsingHelper.getVisionOsUserAgent(null)
-            clientParam.contains("IOS") -> UA_IOS
-            clientParam.contains("ANDROID_VR") -> UA_ANDROID_VR
-            clientParam.contains("ANDROID") -> UA_ANDROID
+            clientParam.contains("IOS") -> clientVersion?.let {
+                "com.google.ios.youtube/$it (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)"
+            } ?: UA_IOS
+            clientParam.contains("ANDROID_VR") -> clientVersion?.let {
+                "com.google.android.apps.youtube.vr.oculus/$it (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
+            } ?: UA_ANDROID_VR
+            clientParam.contains("ANDROID") -> clientVersion?.let {
+                "com.google.android.youtube/$it (Linux; U; Android 14) gzip"
+            } ?: UA_ANDROID
             clientParam.contains("TVHTML5") -> UA_TV
             else -> Net.USER_AGENT
         }
@@ -801,24 +808,17 @@ internal object YouTubeStreamHttp {
     fun createDataSourceFactory(context: Context): DataSource.Factory {
         val dynamicOkHttpFactory = object : DataSource.Factory {
             override fun createDataSource(): DataSource {
-                val base = OkHttpDataSource.Factory(Net.mediaClient).createDataSource()
+                val base = OkHttpDataSource.Factory(Net.client).createDataSource()
                 return object : DataSource by base {
                     override fun open(dataSpec: DataSpec): Long {
                         val url = dataSpec.uri.toString()
-                        val metadataUa = Net.mediaUserAgent(url)
-                        val ua = metadataUa ?: userAgentForUrl(url)
+                        val ua = userAgentForUrl(url)
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
-                        if (url.contains("googlevideo.com", ignoreCase = true) ||
-                            url.contains("youtube.com", ignoreCase = true)
-                        ) {
+                        if (ua == Net.USER_AGENT) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
                             headers.putIfAbsent("Referer", "https://www.youtube.com/")
-                        }
-                        if (Account.signedIn) {
-                            val cookies = Account.cookieHeader()
-                            if (cookies.isNotBlank()) headers.putIfAbsent("Cookie", cookies)
                         }
                         val updatedSpec = dataSpec.buildUpon()
                             .setHttpRequestHeaders(headers)
@@ -845,25 +845,21 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             .setUpstreamDataSourceFactory(dataSourceFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     } ?: dataSourceFactory
-    private val fallback = DefaultMediaSourceFactory(dataSourceFactory).setLoadErrorHandlingPolicy(
-        object : DefaultLoadErrorHandlingPolicy() {
-            override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-                val status = (info.exception as? HttpDataSource.InvalidResponseCodeException)?.responseCode
-                if (status == 403 || status == 410) return C.TIME_UNSET
-                return super.getRetryDelayMsFor(info)
-            }
-
-            override fun getMinimumLoadableRetryCount(dataType: Int): Int {
-                return super.getMinimumLoadableRetryCount(dataType)
-            }
-        },
-    )
+    private val fallback = DefaultMediaSourceFactory(dataSourceFactory)
 
     override fun setDrmSessionManagerProvider(provider: DrmSessionManagerProvider): MediaSource.Factory =
         apply { fallback.setDrmSessionManagerProvider(provider) }
 
-    override fun setLoadErrorHandlingPolicy(policy: LoadErrorHandlingPolicy): MediaSource.Factory =
-        apply { fallback.setLoadErrorHandlingPolicy(policy) }
+    override fun setLoadErrorHandlingPolicy(policy: LoadErrorHandlingPolicy): MediaSource.Factory = apply {
+        val recoveryAwarePolicy = object : LoadErrorHandlingPolicy by policy {
+            override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                val status = (info.exception as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                return if (status == 403 || status == 410) C.TIME_UNSET
+                else policy.getRetryDelayMsFor(info)
+            }
+        }
+        fallback.setLoadErrorHandlingPolicy(recoveryAwarePolicy)
+    }
 
     override fun getSupportedTypes(): IntArray = fallback.supportedTypes
 
@@ -878,8 +874,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
         val route = StreamRecovery.routeFor(mediaItem.mediaId)
-        val forceProgressive = route == StreamRecovery.Route.DirectProgressive ||
-            route == StreamRecovery.Route.Muxed
+        val forceProgressive = route != null
 
         if ((isLive || route == StreamRecovery.Route.Hls) && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing HLS")
@@ -968,7 +963,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             if (dash != null) return dash
         }
 
-        val factory = if (!forceProgressive && durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
+        val factory = if (durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
         return ProgressiveMediaSource.Factory(factory)
             .createMediaSource(mediaItem.buildUpon().setUri(url).build())
     }
