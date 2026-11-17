@@ -27,11 +27,20 @@ object PlayerFallback {
         val visitorData: String?,
         val poTokenPresent: Boolean,
     )
-    private class Cached(val at: Long, val answer: JSONObject, val source: SourceMetadata)
+    private class Cached(val at: Long, val answer: JSONObject, val source: SourceMetadata,
+        val streamingPoToken: String? = null)
     private val cache = ConcurrentHashMap<String, Cached>()
     private val forcedClients = ConcurrentHashMap.newKeySet<String>()
     private val sourceMetadata = ConcurrentHashMap<String, SourceMetadata>()
     private val cacheGenerations = StreamCacheGeneration()
+    private val failureReasons = ConcurrentHashMap<String, String>()
+    private val attemptedMetadata = ConcurrentHashMap<String, SourceMetadata>()
+
+    fun lastFailureReason(videoId: String): String? = failureReasons[videoId]
+    fun lastAttemptMetadata(videoId: String): SourceMetadata? = attemptedMetadata[videoId]
+    internal fun mediaContext(videoId: String): FallbackMediaContext? = cache[videoId]?.let {
+        FallbackMediaContext(it.source.userAgent, it.streamingPoToken, it.source.clientName)
+    }
 
 
     data class DirectStreams(
@@ -39,13 +48,22 @@ object PlayerFallback {
         val audioUrl: String?,
         val muxedUrl: String?,
         val hlsUrl: String?,
+        val dashUrl: String? = null,
     )
 
     /** Playable URLs from the Innertube response; never require a second NewPipe extraction. */
     fun directStreams(videoId: String): DirectStreams? {
         val saved = cache[videoId]?.takeIf { System.currentTimeMillis() - it.at < CACHE_MS }
             ?: return null
-        val streaming = saved.answer.optJSONObject("streamingData") ?: return null
+        val direct = parseDirectStreams(saved.answer.optJSONObject("streamingData") ?: return null)
+            ?: return null
+        listOfNotNull(direct.muxedUrl, direct.videoUrl, direct.audioUrl, direct.hlsUrl, direct.dashUrl).forEach {
+            Net.registerMediaUserAgent(it, saved.source.userAgent)
+        }
+        return direct
+    }
+
+    internal fun parseDirectStreams(streaming: JSONObject): DirectStreams? {
         fun urls(key: String): List<JSONObject> {
             val array = streaming.optJSONArray(key) ?: return emptyList()
             return (0 until array.length()).mapNotNull(array::optJSONObject)
@@ -54,26 +72,26 @@ object PlayerFallback {
         fun bitrate(item: JSONObject) = item.optLong("bitrate", 0L)
         val muxed = urls("formats").maxByOrNull(::bitrate)?.optString("url")
         val adaptive = urls("adaptiveFormats")
-        val videos = adaptive.filter { it.optString("mimeType").startsWith("video/") }
-        val audios = adaptive.filter { it.optString("mimeType").startsWith("audio/") }
-        val video = videos.maxByOrNull(::bitrate)?.optString("url")
-        val audio = audios.maxByOrNull(::bitrate)?.optString("url")
+        val video = adaptive.filter { it.optString("mimeType").startsWith("video/") }
+            .maxByOrNull(::bitrate)?.optString("url")
+        val audio = adaptive.filter { it.optString("mimeType").startsWith("audio/") }
+            .maxByOrNull(::bitrate)?.optString("url")
         val hls = streaming.optString("hlsManifestUrl").takeIf { it.startsWith("https://") }
-        if (muxed == null && video == null && hls == null) return null
-        listOfNotNull(muxed, video, audio, hls).forEach {
-            Net.registerMediaUserAgent(it, saved.source.userAgent)
-        }
-        return DirectStreams(video, audio, muxed, hls)
+        val dash = streaming.optString("dashManifestUrl").takeIf { it.startsWith("https://") }
+        if (muxed == null && video == null && hls == null && dash == null) return null
+        return DirectStreams(video, audio, muxed, hls, dash)
     }
 
     fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
     fun invalidate(videoId: String) {
         cacheGenerations.invalidate(videoId)
         cache.remove(videoId); forcedClients.remove(videoId); sourceMetadata.remove(videoId)
+        attemptedMetadata.remove(videoId); failureReasons.remove(videoId)
     }
     fun invalidateAll() {
         cacheGenerations.invalidateAll()
         cache.clear(); forcedClients.clear(); sourceMetadata.clear()
+        attemptedMetadata.clear(); failureReasons.clear()
     }
 
     fun forceClientFallback(videoId: String, clientIndex: Int = 0): Boolean {
@@ -81,12 +99,10 @@ object PlayerFallback {
         val clients = fallbackClients()
         for (index in clientIndex.coerceIn(0, clients.lastIndex)..clients.lastIndex) {
             val cfg = clients[index]
-            val answer = runCatching { ask(videoId, cfg) }.getOrNull() ?: continue
-            if (!isPlayable(answer)) continue
-            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
+            val saved = ask(videoId, cfg, token) ?: continue
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
-                cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
-                sourceMetadata[videoId] = meta
+                cache[videoId] = saved
+                sourceMetadata[videoId] = saved.source
                 forcedClients.add(videoId)
             }
             if (published) return true
@@ -134,34 +150,30 @@ object PlayerFallback {
     private fun fetchFallback(videoId: String): JSONObject? {
         val token = cacheGenerations.snapshot(videoId)
         for (cfg in fallbackClients()) {
-            val answer = runCatching { ask(videoId, cfg) }
-                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
-                .getOrNull() ?: continue
-            if (!isPlayable(answer)) continue
-            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
+            val saved = ask(videoId, cfg, token) ?: continue
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
-                cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
-                sourceMetadata[videoId] = meta
+                cache[videoId] = saved
+                sourceMetadata[videoId] = saved.source
             }
-            if (published) return answer
+            if (published) return saved.answer
             return null
         }
         return null
     }
 
     private fun fallbackClients(): List<ClientConfig> = listOf(
-        ClientConfig("ANDROID_VR", "28", "1.65.10",
-            "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-            "Android", "12L", "Oculus", "Quest 3", "MOBILE"),
+        ClientConfig("WEB_EMBEDDED_PLAYER", "56", "2.20260708.00.00",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Windows", "10.0", "", "", "DESKTOP"),
+        ClientConfig("WEB", "1", "2.20260708.00.00",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
+            "Macintosh", "10.15.7", "Apple", "", "DESKTOP"),
         ClientConfig("TVHTML5", "7", "7.20260213.00.00",
             "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15",
             "Tizen", "4.0.0.2", "Samsung", "SmartTV", "TV"),
         ClientConfig("IOS", "5", "21.10.3",
             "com.google.ios.youtube/21.10.3 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
             "iPhone", "18.1.0.22B83", "Apple", "iPhone16,2", "MOBILE"),
-        ClientConfig("WEB_EMBEDDED_PLAYER", "56", "1.20260213.00.00",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Windows", "10.0", "", "", "DESKTOP"),
     )
 
     private fun videoIdFrom(requestBody: ByteArray?): String? {
@@ -198,7 +210,9 @@ object PlayerFallback {
 
     private fun hasPlayableStreams(player: JSONObject): Boolean {
         val streaming = player.optJSONObject("streamingData") ?: return false
-        if ((streaming.opt("hlsManifestUrl") as? String)?.isNotBlank() == true) return true
+        if (listOf("hlsManifestUrl", "dashManifestUrl").any {
+                streaming.optString(it).startsWith("https://")
+            }) return true
         return listOf("formats", "adaptiveFormats").any { key ->
             val formats = streaming.optJSONArray(key) ?: return@any false
             (0 until formats.length()).any { index ->
@@ -229,10 +243,26 @@ object PlayerFallback {
             ("a bot" in lower || "not a bot" in lower || "confirm you" in lower || "error" in lower)
     }
 
-    private fun ask(videoId: String, cfg: ClientConfig): JSONObject {
+    private fun ask(videoId: String, cfg: ClientConfig, generation: StreamCacheGeneration.Token): Cached? {
+        cacheGenerations.publishIfCurrent(videoId, generation) {
+            attemptedMetadata[videoId] = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, null, false)
+        }
+        return try {
+            askResponse(videoId, cfg, generation)
+        } catch (failure: Exception) {
+            cacheGenerations.publishIfCurrent(videoId, generation) {
+                failureReasons[videoId] = "${cfg.name}: ${failure.javaClass.simpleName}"
+            }
+            Log.w(TAG, "Fallback ${cfg.name} request failed: ${failure.javaClass.simpleName}")
+            null
+        }
+    }
+
+    private fun askResponse(videoId: String, cfg: ClientConfig, generation: StreamCacheGeneration.Token): Cached? {
         val client = JSONObject()
             .put("clientName", cfg.name)
             .put("clientVersion", cfg.version)
+            .put("userAgent", cfg.userAgent)
             .put("clientScreen", if (cfg.name == "WEB_EMBEDDED_PLAYER") "EMBED" else "WATCH")
             .put("platform", cfg.platform)
             .put("deviceMake", cfg.deviceMake)
@@ -243,15 +273,27 @@ object PlayerFallback {
             .put("gl", "US")
         val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
         visitorData?.let { client.put("visitorData", it) }
+        val poTokens = if (cfg.name in setOf("WEB", "WEB_EMBEDDED_PLAYER") && visitorData != null) {
+            YTXTubeApplication.poTokenGenerator.getWebClientPoToken(videoId, visitorData)
+        } else null
+        val metadata = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, visitorData,
+            !poTokens?.playerRequestPoToken.isNullOrBlank())
+        cacheGenerations.publishIfCurrent(videoId, generation) { attemptedMetadata[videoId] = metadata }
+        val context = JSONObject().put("client", client)
+        if (cfg.name == "WEB_EMBEDDED_PLAYER") {
+            context.put("thirdParty", JSONObject().put("embedUrl", "https://www.youtube.com/"))
+        }
 
         val body = JSONObject()
-            .put("context", JSONObject().put("client", client))
+            .put("context", context)
             .put("videoId", videoId)
             .put("contentCheckOk", true)
             .put("racyCheckOk", true)
             .apply {
-                if (cfg.name == "WEB_EMBEDDED_PLAYER") {
-                    put("thirdPartyEmbedUrl", "https://www.youtube.com/embed/$videoId")
+                if (cfg.name in setOf("WEB", "WEB_EMBEDDED_PLAYER")) {
+                    poTokens?.playerRequestPoToken?.takeIf { it.isNotBlank() }?.let {
+                        put("serviceIntegrityDimensions", JSONObject().put("poToken", it))
+                    }
                 }
             }
 
@@ -266,16 +308,39 @@ object PlayerFallback {
             .apply {
                 val cookies = Account.cookieHeader()
                 if (cookies.isNotBlank()) header("Cookie", cookies)
-                if (cfg.name == "WEB_EMBEDDED_PLAYER") {
+                if (cfg.name in setOf("WEB", "WEB_EMBEDDED_PLAYER")) {
                     header("Origin", "https://www.youtube.com")
-                    header("Referer", "https://www.youtube.com/embed/$videoId")
+                    header("Referer", if (cfg.name == "WEB_EMBEDDED_PLAYER")
+                        "https://www.youtube.com/embed/$videoId" else "https://www.youtube.com/watch?v=$videoId")
                 }
             }
             .build()
 
         Net.client.newCall(request).execute().use { response ->
-            check(response.isSuccessful) { "HTTP ${response.code}" }
-            return JSONObject(response.body!!.string())
+            if (!response.isSuccessful) {
+                cacheGenerations.publishIfCurrent(videoId, generation) {
+                    failureReasons[videoId] = "${cfg.name}:HTTP_${response.code}"
+                }
+                return null
+            }
+            val answer = JSONObject(response.body?.string().orEmpty())
+            if (!isPlayable(answer)) {
+                val reason = rejectionReason(cfg.name, answer)
+                cacheGenerations.publishIfCurrent(videoId, generation) { failureReasons[videoId] = reason }
+                Log.w(TAG, "Fallback rejected: $reason")
+                return null
+            }
+            cacheGenerations.publishIfCurrent(videoId, generation) { failureReasons.remove(videoId) }
+            return Cached(System.currentTimeMillis(), answer, metadata, poTokens?.streamingDataPoToken)
         }
     }
+
+    internal fun rejectionReason(client: String, answer: JSONObject): String {
+        val playability = answer.optJSONObject("playabilityStatus")
+        val status = playability?.optString("status")?.takeIf { it.isNotBlank() } ?: "UNKNOWN"
+        val reason = playability?.optString("reason").orEmpty().replace(Regex("[\\r\\n]+"), " ").take(300)
+        val detail = reason.ifBlank { if (status == "OK") "NO_SUPPORTED_STREAMS" else "" }
+        return "$client:$status${if (detail.isNotBlank()) "($detail)" else ""}"
+    }
+
 }

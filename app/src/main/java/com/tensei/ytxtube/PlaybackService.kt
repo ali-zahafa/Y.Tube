@@ -348,7 +348,7 @@ class PlaybackService : MediaSessionService() {
             if (resolving != null) return
             val task = resolver.submit<MediaItem> {
                 if (next.mediaMetadata.extras?.getString("local_uri") == null) {
-                    StreamCache.getOrLoad(next.mediaId)
+                    if (PlayerFallback.directStreams(next.mediaId) == null) StreamCache.getOrLoad(next.mediaId)
                 }
                 playableItem(next)
             }
@@ -491,13 +491,13 @@ class PlaybackService : MediaSessionService() {
                         )
                         .build()
                 } else {
-                    val info = StreamCache.getOrLoad(item.mediaId)
+                    val info = if (PlayerFallback.directStreams(item.mediaId) == null) StreamCache.getOrLoad(item.mediaId) else null
                     item.buildUpon()
                         .setUri(YouTube.watchUrl(item.mediaId))
                         .setMediaMetadata(
                             item.mediaMetadata.buildUpon()
-                                .setTitle(item.mediaMetadata.title ?: info.name)
-                                .setArtist(item.mediaMetadata.artist ?: info.uploaderName)
+                                .setTitle(item.mediaMetadata.title ?: info?.name)
+                                .setArtist(item.mediaMetadata.artist ?: info?.uploaderName)
                                 .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
                                 .build(),
                         )
@@ -810,19 +810,20 @@ internal object YouTubeStreamHttp {
         }
     }
 
-    fun createDataSourceFactory(context: Context): DataSource.Factory {
+    fun createDataSourceFactory(context: Context, mediaContext: FallbackMediaContext? = null): DataSource.Factory {
         val dynamicOkHttpFactory = object : DataSource.Factory {
             override fun createDataSource(): DataSource {
                 val base = OkHttpDataSource.Factory(Net.mediaClient).createDataSource()
                 return object : DataSource by base {
                     override fun open(dataSpec: DataSpec): Long {
                         val url = dataSpec.uri.toString()
-                        val ua = Net.mediaUserAgent(url) ?: userAgentForUrl(url)
+                        val ua = mediaContext?.userAgent ?: Net.mediaUserAgent(url) ?: userAgentForUrl(url)
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
                         val clientName = Uri.parse(url).getQueryParameter("c")?.uppercase().orEmpty()
-                        val isWebClient = clientName == "WEB" || clientName == "MWEB" ||
+                        val isWebClient = mediaContext?.clientName in setOf("WEB", "MWEB", "WEB_EMBEDDED_PLAYER") ||
+                            clientName == "WEB" || clientName == "MWEB" ||
                             clientName == "WEB_EMBEDDED_PLAYER" || (clientName.isBlank() && ua == Net.USER_AGENT)
                         if (isWebClient) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
@@ -834,6 +835,7 @@ internal object YouTubeStreamHttp {
                             headers["Cookie"] = cookies
                         }
                         val updatedSpec = dataSpec.buildUpon()
+                            .setUri(mediaContext?.mediaUrl(url) ?: url)
                             .setHttpRequestHeaders(headers)
                             .build()
                         try {
@@ -859,7 +861,7 @@ internal object YouTubeStreamHttp {
 }
 
 @OptIn(UnstableApi::class)
-private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) : MediaSource.Factory {
+internal class YouTubeMediaSourceFactory(private val context: Context, cache: SimpleCache?) : MediaSource.Factory {
     private val dataSourceFactory: DataSource.Factory = YouTubeStreamHttp.createDataSourceFactory(context)
     private val onDemandDataSourceFactory: DataSource.Factory = cache?.let {
         CacheDataSource.Factory()
@@ -897,22 +899,19 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             return fallback.createMediaSource(mediaItem)
         }
         PlayerFallback.directStreams(mediaItem.mediaId)?.let { direct ->
-            val hls = direct.hlsUrl
-            if (direct.muxedUrl == null && (direct.videoUrl == null || direct.audioUrl == null) && hls != null) {
-                return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
-            }
-            // Prefer the complete progressive stream when offered. A valid muxed
-            // URL should not be hidden by a failing adaptive video/audio pair.
-            if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem)
+            val mediaContext = PlayerFallback.mediaContext(mediaItem.mediaId)
+            val scoped = YouTubeStreamHttp.createDataSourceFactory(context, mediaContext)
+            if (direct.hlsUrl != null) return hlsFactory(scoped)
+                .createMediaSource(mediaItem.buildUpon().setUri(direct.hlsUrl).build())
+            if (direct.dashUrl != null) return DashMediaSource.Factory(scoped)
+                .also { factory -> recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy) }
+                .createMediaSource(mediaItem.buildUpon().setUri(direct.dashUrl).build())
+            if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem, scoped)
             if (direct.videoUrl != null && direct.audioUrl != null) {
-                return MergingMediaSource(
-                    true,
-                    true,
-                    directSource(direct.videoUrl, mediaItem),
-                    directSource(direct.audioUrl, mediaItem),
-                )
+                return MergingMediaSource(true, true,
+                    directSource(direct.videoUrl, mediaItem, scoped),
+                    directSource(direct.audioUrl, mediaItem, scoped))
             }
-            if (hls != null) return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
         }
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
@@ -967,13 +966,13 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         }
     }
 
-    private fun directSource(url: String, mediaItem: MediaItem): MediaSource =
-        ProgressiveMediaSource.Factory(dataSourceFactory)
+    private fun directSource(url: String, mediaItem: MediaItem, factory: DataSource.Factory): MediaSource =
+        ProgressiveMediaSource.Factory(factory)
             .also { factory -> recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy) }
             .createMediaSource(mediaItem.buildUpon().setUri(url).build())
 
-    private fun hlsFactory(): HlsMediaSource.Factory =
-        HlsMediaSource.Factory(dataSourceFactory).also { factory ->
+    private fun hlsFactory(factory: DataSource.Factory = dataSourceFactory): HlsMediaSource.Factory =
+        HlsMediaSource.Factory(factory).also { factory ->
             recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy)
         }
 

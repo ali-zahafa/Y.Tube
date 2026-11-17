@@ -39,10 +39,6 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
-      - name: Build debug APK
-        if: ${{ !cancelled() }}
-        run: ./gradlew :app:assembleDebug --stacktrace
-
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -50,14 +46,6 @@ jobs:
           name: unit-test-reports
           path: app/build/reports/tests/
           if-no-files-found: ignore
-
-      - name: Upload debug APK
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: YTXTube-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
 
   web-background-device-test:
     runs-on: ubuntu-latest
@@ -76,19 +64,30 @@ jobs:
       - name: Install compile SDK
         run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Compile test APKs before starting the emulator
+        run: ./gradlew --no-daemon --max-workers=2 :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test real WebView media with screen off beyond 60 seconds
+      - name: Validate actual YouTube videos and background controls
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
           target: google_apis
+          ram-size: 2048M
+          cores: 2
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
-          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+          script: bash scripts/verify-device-playback.sh
+      - name: Publish APK only after actual video playback passed
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTXTube-validated-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
       - name: Upload device test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -97,4 +96,5 @@ jobs:
           path: |
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
+            app/build/playback-validation/
           if-no-files-found: ignore

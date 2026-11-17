@@ -149,7 +149,7 @@ class PlayerState(private val scope: CoroutineScope) {
     init {
 
         scope.launch {
-            snapshotFlow { StreamRecovery.recovering to StreamRecovery.failed }.collect { (_, failed) ->
+            snapshotFlow { Triple(StreamRecovery.recovering, StreamRecovery.failed, current?.id) }.collect { (_, failed, _) ->
                 syncFromPlayer()
                 if (failed != null && failed.first == current?.id) {
                     error = failed.second
@@ -412,7 +412,11 @@ class PlayerState(private val scope: CoroutineScope) {
                     if (!isActive || current?.id != item.id) return@launch
                     Log.w(TAG, "details failed for ${item.id}", it)
                     error = YouTube.friendlyError(it)
-                    if (startPlayback && item.localUri == null &&
+                    if (startPlayback && item.localUri == null && PlayerFallback.directStreams(item.id) != null) {
+                        // A direct manifest does not need NewPipe metadata or a second extraction.
+                        error = null
+                        startPlayback(item)
+                    } else if (startPlayback && item.localUri == null &&
                         it !is java.io.IOException && it !is kotlinx.coroutines.CancellationException) {
                         switchWebPlayer(true)
                     }

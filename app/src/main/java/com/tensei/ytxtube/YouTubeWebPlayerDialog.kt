@@ -134,6 +134,12 @@ internal fun YouTubeWebPlayerDialog(videoId: String, startPositionMs: Long = 0, 
                 }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { playWebVideo(view) { failure -> pageError = failure } }) { Text("Play") }
+                Button(onClick = {
+                    view.evaluateJavascript("(function(){const p=document.getElementById('movie_player'); if(p&&typeof p.pauseVideo==='function')p.pauseVideo(); document.querySelectorAll('video').forEach(v=>v.pause());})();", null)
+                }) { Text("Pause") }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     startWebBackground(context, view,
                         onStarted = {
@@ -272,4 +278,36 @@ internal fun startWebBackground(
             }
         }
     }
+}
+
+
+/** Explicit native user action: ask YouTube's player to load/play and verify real media state. */
+internal fun playWebVideo(view: WebView, onResult: (String?) -> Unit = {}) {
+    if (WebPlaybackSession.view !== view) return
+    view.settings.mediaPlaybackRequiresUserGesture = false
+    view.evaluateJavascript("""
+        (function(){
+          window.__ytubePlayError = '';
+          try {
+            const p=document.getElementById('movie_player');
+            if(p&&typeof p.playVideo==='function') p.playVideo();
+            const v=document.querySelector('video');
+            if(v) v.play().catch(e=>window.__ytubePlayError=e.name+': '+e.message);
+          } catch(e) { window.__ytubePlayError=e.name+': '+e.message; }
+        })();
+    """.trimIndent(), null)
+    val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    fun verify(attempt: Int) {
+        if (WebPlaybackSession.view !== view) return
+        view.evaluateJavascript("(function(){const v=document.querySelector('video'); return v&&!v.paused&&v.readyState>=2?'playing':(window.__ytubePlayError||'waiting');})();") { raw ->
+            val status = runCatching { org.json.JSONTokener(raw).nextValue() as? String }.getOrNull()
+            when {
+                status == "playing" -> onResult(null)
+                status != null && status != "waiting" -> onResult(status.take(160))
+                attempt < 10 -> handler.postDelayed({ verify(attempt + 1) }, 500)
+                else -> onResult("Video has not started yet. Check the message on the YouTube page and try Play again.")
+            }
+        }
+    }
+    handler.postDelayed({ verify(0) }, 500)
 }
