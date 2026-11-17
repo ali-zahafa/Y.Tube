@@ -167,8 +167,12 @@ object PlayerFallback {
         val streaming = player.optJSONObject("streamingData") ?: return false
         if ((streaming.opt("hlsManifestUrl") as? String)?.isNotBlank() == true) return true
         if ((streaming.opt("dashManifestUrl") as? String)?.isNotBlank() == true) return true
-        if ((streaming.optJSONArray("formats")?.length() ?: 0) > 0) return true
-        return (streaming.optJSONArray("adaptiveFormats")?.length() ?: 0) > 0
+        return listOf("formats", "adaptiveFormats").any { key ->
+            val formats = streaming.optJSONArray(key) ?: return@any false
+            (0 until formats.length()).any { index ->
+                formats.optJSONObject(index)?.optString("url")?.startsWith("https://") == true
+            }
+        }
     }
 
     internal fun isBlocked(body: String): Boolean {
@@ -205,7 +209,8 @@ object PlayerFallback {
             .put("osVersion", cfg.osVersion)
             .put("hl", "en")
             .put("gl", "US")
-        VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }?.let { client.put("visitorData", it) }
+        val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
+        visitorData?.let { client.put("visitorData", it) }
 
         val body = JSONObject()
             .put("context", JSONObject().put("client", client))
@@ -223,6 +228,7 @@ object PlayerFallback {
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .header("User-Agent", cfg.userAgent)
             .header("X-Goog-Api-Format-Version", "2")
+            .apply { visitorData?.let { header("X-Goog-Visitor-Id", it) } }
             .header("X-YouTube-Client-Name", cfg.id)
             .header("X-YouTube-Client-Version", cfg.version)
             .apply {
