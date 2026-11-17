@@ -38,6 +38,7 @@ internal class StreamRecoverer(
     private val cache: androidx.media3.datasource.cache.SimpleCache?,
 ) : Player.Listener {
     private val main = Handler(Looper.getMainLooper())
+    private val generation = PlaybackRecoveryGeneration()
     private var lastId: String? = null
     private var attempt = 0
     private var activeRecovery = false
@@ -45,11 +46,30 @@ internal class StreamRecoverer(
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         val id = mediaItem?.mediaId
         if (id == lastId) return
+        generation.invalidate()
+        StreamRecovery.recovering = null
         lastId = id
         attempt = 0
         activeRecovery = false
         id?.let(StreamRecovery::reset)
         StreamRecovery.failed = null
+    }
+
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        if (playWhenReady && WebPlaybackSession.background) WebPlaybackSession.stop()
+        if (!playWhenReady && activeRecovery) {
+            generation.invalidate()
+            activeRecovery = false
+            StreamRecovery.recovering = null
+        }
+    }
+
+    fun release() {
+        generation.invalidate()
+        activeRecovery = false
+        StreamRecovery.recovering = null
+        main.removeCallbacksAndMessages(null)
+        player.removeListener(this)
     }
 
     override fun onPlayerError(error: PlaybackException) {
@@ -68,7 +88,7 @@ internal class StreamRecoverer(
         activeRecovery = true
         StreamRecovery.failed = null
         StreamRecovery.recovering = id
-        runStage(item, id, position, shouldPlay, status, ++attempt)
+        runStage(item, id, position, shouldPlay, status, ++attempt, generation.snapshot())
     }
 
     private fun runStage(
@@ -78,8 +98,10 @@ internal class StreamRecoverer(
         shouldPlay: Boolean,
         status: Int,
         stage: Int,
+        token: Long,
     ) {
         resolver.execute {
+            if (!generation.isCurrent(token)) return@execute
             val result = runCatching {
                 when (stage) {
                     1 -> {
@@ -88,12 +110,12 @@ internal class StreamRecoverer(
                         VisitorDataProvider.invalidate()
                         kotlinx.coroutines.runBlocking { YTXTubeApplication.poTokenGenerator.invalidate() }
                         StreamCache.getOrLoad(id)
-                        StreamRecovery.reset(id)
+                        null
                     }
                     2 -> {
                         StreamCache.invalidate(id)
                         StreamCache.getOrLoad(id)
-                        StreamRecovery.setRoute(id, StreamRecovery.Route.DirectProgressive)
+                        StreamRecovery.Route.DirectProgressive
                     }
                     else -> {
                         evictFailedCache(id)
@@ -105,28 +127,25 @@ internal class StreamRecoverer(
                         val direct = checkNotNull(PlayerFallback.directStreams(id)) {
                             "Fallback player response contained no supported direct URLs"
                         }
-                        StreamRecovery.setRoute(
-                            id,
-                            if (direct.hlsUrl != null && direct.videoUrl == null && direct.muxedUrl == null)
-                                StreamRecovery.Route.Hls
-                            else StreamRecovery.Route.DirectProgressive,
-                        )
+                        if (direct.hlsUrl != null && direct.videoUrl == null && direct.muxedUrl == null)
+                            StreamRecovery.Route.Hls
+                        else StreamRecovery.Route.DirectProgressive
                     }
                 }
             }
             main.post {
-                if (player.currentMediaItem?.mediaId != id) {
-                    activeRecovery = false
-                    StreamRecovery.recovering = null
-                    return@post
-                }
-                result.onSuccess {
+                // Ignore stale callbacks without clearing a newer video's recovery state.
+                if (!generation.isCurrent(token) || player.currentMediaItem?.mediaId != id) return@post
+                result.mapCatching { route ->
+                    if (route == null) StreamRecovery.reset(id) else StreamRecovery.setRoute(id, route)
+                    // MediaSource creation can also fail synchronously; keep it inside
+                    // the same bounded recovery sequence instead of crashing main.
                     resume(item, position, shouldPlay)
                 }.onFailure { failure ->
                     Log.w(TAG, "Recovery stage $stage failed for $id", failure)
                     if (stage < MAX_ATTEMPTS) {
                         attempt = stage + 1
-                        runStage(item, id, position, shouldPlay, httpStatus(failure) ?: status, stage + 1)
+                        runStage(item, id, position, shouldPlay, httpStatus(failure) ?: status, stage + 1, token)
                     } else {
                         activeRecovery = false
                         StreamRecovery.recovering = null

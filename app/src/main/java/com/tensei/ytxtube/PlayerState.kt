@@ -258,6 +258,7 @@ class PlayerState(private val scope: CoroutineScope) {
         private set
 
     fun open(item: VideoItem, expand: Boolean = true) {
+        if (WebPlaybackSession.videoId != item.id) WebPlaybackSession.stop()
         isMusicMode = false
         AudioOnly.set(false)
         runCatching { applyVideoTrack() }
@@ -394,8 +395,10 @@ class PlayerState(private val scope: CoroutineScope) {
                     comments.load(item.id)
                     known[item.id] = d.item
                     d.related.forEach { known[it.id] = it }
-                    if (!d.playable) error = "No playable stream was found for this video."
-                    else if (startPlayback) startPlayback(d.item)
+                    if (!d.playable) {
+                        error = "No direct stream was found. Opening YouTube web player."
+                        if (startPlayback) switchWebPlayer(true)
+                    } else if (startPlayback) startPlayback(d.item)
                     else publishUpNext(item.id)
 
                     scope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -409,6 +412,10 @@ class PlayerState(private val scope: CoroutineScope) {
                     if (!isActive || current?.id != item.id) return@launch
                     Log.w(TAG, "details failed for ${item.id}", it)
                     error = YouTube.friendlyError(it)
+                    if (startPlayback && item.localUri == null &&
+                        it !is java.io.IOException && it !is kotlinx.coroutines.CancellationException) {
+                        switchWebPlayer(true)
+                    }
 
                     comments.load(item.id)
                 }
@@ -839,7 +846,14 @@ class PlayerState(private val scope: CoroutineScope) {
     fun switchWebPlayer(enabled: Boolean) {
         if (webPlayerEnabled == enabled) return
         if (enabled) controller?.pause()
+        else WebPlaybackSession.stop()
         webPlayerEnabled = enabled
+    }
+    fun hideWebPlayerForBackground() {
+        controller?.pause()
+        fullscreen = false
+        portraitFullscreen = false
+        webPlayerEnabled = false
     }
     var dualCaptionsEnabled by mutableStateOf(false)
         private set
@@ -1027,6 +1041,7 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun play() {
+        WebPlaybackSession.stop()
         val player = controller ?: return
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
@@ -1223,6 +1238,8 @@ class PlayerState(private val scope: CoroutineScope) {
     }
 
     fun close() {
+        WebPlaybackSession.stop()
+        webPlayerEnabled = false
         clearBackgroundAudio()
         loadJob?.cancel()
         controller?.run { stop(); clearMediaItems() }

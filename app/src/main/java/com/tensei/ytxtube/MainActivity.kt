@@ -1052,6 +1052,19 @@ fun YtxTubeApp() {
             }
         }
 
+        // Keep website fallback above both watch-page and fullscreen/TV scenes.
+        // PlayerScreen is not composed while FullscreenPlayer is visible.
+        if (player.webPlayerEnabled) {
+            player.current?.let { webItem ->
+                YouTubeWebPlayerDialog(
+                    videoId = webItem.id,
+                    startPositionMs = player.positionMs,
+                    onBackground = { player.hideWebPlayerForBackground() },
+                    onClose = { player.switchWebPlayer(false) },
+                )
+            }
+        }
+
         if (signingIn) {
             SignInScreen(
                 onDone = {

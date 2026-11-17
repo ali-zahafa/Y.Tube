@@ -5,6 +5,7 @@ import android.os.Looper
 import android.webkit.CookieManager
 import com.tensei.ytxtube.VisitorDataProvider
 import com.tensei.ytxtube.YTXTubeApplication
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.TimeoutCancellationException
@@ -48,7 +49,7 @@ class PoTokenGenerator {
         GlobalScope.launch(Dispatchers.IO) {
             val sessionId = VisitorDataProvider.getOrFetch() ?: return@launch
             runCatching {
-                webPoTokenGenLock.withLock {
+                withTimeout(POTOKEN_TIMEOUT_MS) { webPoTokenGenLock.withLock {
                     if (webPoTokenGenerator == null ||
                         webPoTokenGenerator!!.isExpired ||
                         webPoTokenSessionId != sessionId
@@ -57,17 +58,16 @@ class PoTokenGenerator {
                         webPoTokenGenerator = null
                         webPoTokenStreamingPot = null
                         webPoTokenSessionId = null
-                        withContext(Dispatchers.Main) { old?.close() }
+                        withContext(NonCancellable + Dispatchers.Main) { old?.close() }
 
-                        val created = PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
-                        val streamingToken = created.generatePoToken(sessionId)
+                        val (created, streamingToken) = createGenerator(sessionId)
                         webPoTokenGenerator = created
                         webPoTokenSessionId = sessionId
                         webPoTokenStreamingPot = streamingToken
                     }
-                }
+                } }
             }.onFailure {
-                lastStatus = PoTokenStatus.WEBVIEW_ERROR
+                lastStatus = if (it is TimeoutCancellationException) PoTokenStatus.TIMEOUT else PoTokenStatus.WEBVIEW_ERROR
                 Log.w(tag, "PoToken pre-initialization failed: ${it.javaClass.simpleName}")
             }
         }
@@ -123,9 +123,19 @@ class PoTokenGenerator {
             webPoTokenSessionId = null
             current
         }
-        withContext(Dispatchers.Main) { old?.close() }
+        withContext(NonCancellable + Dispatchers.Main) { old?.close() }
         webViewBadImpl = false
         lastStatus = PoTokenStatus.INVALIDATED
+    }
+
+    private suspend fun createGenerator(sessionId: String): Pair<PoTokenWebView, String> {
+        val created = PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
+        return try {
+            created to created.generatePoToken(sessionId)
+        } catch (error: Throwable) {
+            withContext(NonCancellable + Dispatchers.Main) { created.close() }
+            throw error
+        }
     }
 
     private suspend fun generateForSession(
@@ -144,10 +154,9 @@ class PoTokenGenerator {
                 webPoTokenGenerator = null
                 webPoTokenStreamingPot = null
                 webPoTokenSessionId = null
-                withContext(Dispatchers.Main) { old?.close() }
+                withContext(NonCancellable + Dispatchers.Main) { old?.close() }
 
-                val created = PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
-                val streaming = created.generatePoToken(sessionId)
+                val (created, streaming) = createGenerator(sessionId)
                 webPoTokenGenerator = created
                 webPoTokenSessionId = sessionId
                 webPoTokenStreamingPot = streaming

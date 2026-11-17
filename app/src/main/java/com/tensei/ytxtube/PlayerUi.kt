@@ -198,9 +198,6 @@ fun PlayerScreen(
 ) {
     val c = MaterialTheme.colorScheme
     val item = state.current ?: return
-    if (state.webPlayerEnabled) {
-        YouTubeWebPlayerDialog(videoId = item.id, onClose = { state.switchWebPlayer(false) })
-    }
     val isLiveStream = state.details?.item?.isLive == true || item.isLive
     LaunchedEffect(state.sheet, item.id, isLiveStream) {
         if (state.sheet == PlayerSheet.Comments && isLiveStream) {
@@ -2001,6 +1998,13 @@ private fun VideoDetailsBlock(
     isLiveStream: Boolean,
 ) {
     Column(Modifier.padding(horizontal = 20.dp)) {
+        if (WebPlaybackSession.background && WebPlaybackSession.videoId == item.id) {
+            Text("Web player in background", color = c.primary, modifier = Modifier.padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.TextButton(onClick = { state.switchWebPlayer(true) }) { Text("Return to web player") }
+                androidx.compose.material3.TextButton(onClick = { WebPlaybackSession.stop() }) { Text("Stop") }
+            }
+        }
         Spacer(Modifier.height(18.dp))
         Text(
             item.title,

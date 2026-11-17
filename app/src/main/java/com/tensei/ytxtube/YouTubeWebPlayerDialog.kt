@@ -37,11 +37,11 @@ import android.net.Uri
 /**
  * Optional YouTube website player. ExoPlayer remains the default player.
  * The page is isolated in its own WebView and navigation is restricted to YouTube.
- * This mode does not claim ExoPlayer's offline downloads or background features.
+ * Background mode retains this exact page in WebPlaybackService; it never re-extracts a URL.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
+internal fun YouTubeWebPlayerDialog(videoId: String, startPositionMs: Long = 0, onBackground: () -> Unit, onClose: () -> Unit) {
     var pageError by remember(videoId) { mutableStateOf<String?>(null) }
     var fullscreenView by remember(videoId) { mutableStateOf<View?>(null) }
     var fullscreenCallback by remember(videoId) { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
@@ -58,12 +58,18 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
     ) {
         Column(Modifier.fillMaxSize().background(Color.Black)) {
             Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("YouTube Web Player", color = Color.White, modifier = Modifier.padding(10.dp))
+                Text("Web Player", color = Color.White, modifier = Modifier.padding(10.dp))
                 Button(onClick = onClose) { Text("Back to ExoPlayer") }
             }
             val context = androidx.compose.ui.platform.LocalContext.current
             val view = remember(videoId, context) {
-                WebView(context).apply {
+                if (WebPlaybackSession.videoId != videoId) {
+                    WebPlaybackSession.stop()
+                    WebPlaybackSession.destroy()
+                }
+                WebPlaybackSession.view ?: BackgroundPlaybackWebView(context.applicationContext).apply {
+                    WebPlaybackSession.view = this
+                    WebPlaybackSession.videoId = videoId
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = true
@@ -71,7 +77,10 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    webChromeClient = object : WebChromeClient() {
+                    loadUrl("https://m.youtube.com/watch?v=$videoId&t=${startPositionMs.coerceAtLeast(0) / 1000}s")
+                }
+            }
+                view.webChromeClient = object : WebChromeClient() {
                         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                             if (view == null || fullscreenView != null) {
                                 callback?.onCustomViewHidden()
@@ -86,7 +95,7 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                             fullscreenCallback = null
                         }
                     }
-                    webViewClient = object : WebViewClient() {
+                view.webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                             pageError = null
                         }
@@ -106,17 +115,37 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                             return uri.scheme != "https" || !(host == "youtube.com" || host.endsWith(".youtube.com"))
                         }
                     }
-                    loadUrl("https://m.youtube.com/watch?v=$videoId")
-                }
-            }
+
             DisposableEffect(view) {
+                WebPlaybackSession.attached = true
+                view.onResume()
                 onDispose {
+                    WebPlaybackSession.attached = false
+                    // Do not retain callbacks/closures that belong to the dismissed dialog.
+                    view.webChromeClient = WebChromeClient()
+                    view.webViewClient = BackgroundWebViewClient()
                     fullscreenCallback?.onCustomViewHidden()
                     fullscreenView = null
                     fullscreenCallback = null
-                    view.stopLoading()
-                    view.loadUrl("about:blank")
-                    view.destroy()
+                    if (!WebPlaybackSession.background) {
+                        WebPlaybackSession.stop()
+                        WebPlaybackSession.destroy()
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    startWebBackground(context, view,
+                        onStarted = {
+                            fullscreenCallback?.onCustomViewHidden()
+                            fullscreenView = null
+                            onBackground()
+                        },
+                        onError = { pageError = it },
+                    )
+                }) { Text("Background playback") }
+                if (WebPlaybackSession.background) {
+                    Button(onClick = { WebPlaybackSession.stop(); onClose() }) { Text("Stop background") }
                 }
             }
             if (pageError != null) {
@@ -175,3 +204,72 @@ private val AD_STATE_OBSERVER = """
   check();
 })();
 """.trimIndent()
+
+
+// Installed only after an explicit user gesture. Reversible: the original getters are
+// used whenever background mode is disabled; user Pause is never overridden.
+internal val BACKGROUND_MODE_SCRIPT = """
+(function () {
+  window.__ytubeBackground = true;
+  if (window.__ytubeVisibilityInstalled) return;
+  window.__ytubeVisibilityInstalled = true;
+  ['hidden', 'visibilityState'].forEach(function (key) {
+    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, key);
+    if (!descriptor || !descriptor.get) return;
+    try {
+      Object.defineProperty(document, key, { configurable: true, get: function () {
+        return window.__ytubeBackground ? (key === 'hidden' ? false : 'visible') : descriptor.get.call(document);
+      }});
+    } catch (_) {}
+  });
+  document.addEventListener('visibilitychange', function (event) {
+    if (window.__ytubeBackground) event.stopImmediatePropagation();
+  }, true);
+})();
+""".trimIndent()
+
+
+/** Retained pages must keep navigation restrictions without retaining Compose callbacks. */
+private class BackgroundWebViewClient : WebViewClient() {
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val uri = request?.url ?: return true
+        val host = uri.host?.lowercase() ?: return true
+        return uri.scheme != "https" || !(host == "youtube.com" || host.endsWith(".youtube.com"))
+    }
+    override fun onPageFinished(view: WebView?, url: String?) {
+        if (WebPlaybackSession.background && url?.startsWith("https://m.youtube.com/") == true) {
+            view?.evaluateJavascript(BACKGROUND_MODE_SCRIPT, null)
+        }
+    }
+}
+
+
+/** Shared by the button and on-device regression tests; success requires playing media. */
+internal fun startWebBackground(
+    context: android.content.Context,
+    view: WebView,
+    onStarted: () -> Unit,
+    onError: (String) -> Unit,
+) {
+    view.evaluateJavascript("(function(){const v=document.querySelector('video'); return !!v && !v.paused && !v.ended && v.readyState >= 2;})()") { result ->
+        if (result != "true") {
+            onError("Start the video on the page first, then tap Background playback.")
+        } else if (WebPlaybackSession.view !== view) {
+            onError("This web player has already closed. Open it and try again.")
+        } else {
+            // The user's background button gesture authorizes later notification Play.
+            view.settings.mediaPlaybackRequiresUserGesture = false
+            view.evaluateJavascript(BACKGROUND_MODE_SCRIPT, null)
+            WebPlaybackSession.background = true
+            runCatching {
+                androidx.core.content.ContextCompat.startForegroundService(context,
+                    android.content.Intent(context, WebPlaybackService::class.java))
+            }.onSuccess { onStarted() }.onFailure {
+                WebPlaybackSession.background = false
+                view.settings.mediaPlaybackRequiresUserGesture = true
+                view.evaluateJavascript("window.__ytubeBackground = false;", null)
+                onError("Could not start background playback. Keep the player open and try again.")
+            }
+        }
+    }
+}

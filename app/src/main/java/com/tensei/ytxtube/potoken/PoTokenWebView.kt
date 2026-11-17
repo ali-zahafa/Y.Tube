@@ -11,11 +11,11 @@ import androidx.collection.ArrayMap
 import com.tensei.ytxtube.BuildConfig
 import com.tensei.ytxtube.Net
 import java.time.Instant
-import java.time.temporal.ChronoUnit
 import java.util.Collections
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -30,7 +30,7 @@ class PoTokenWebView
 private constructor(
   context: Context,
 
-  private val continuation: Continuation<PoTokenWebView>,
+  private val continuation: CancellableContinuation<PoTokenWebView>,
 ) {
   private val webView = WebView(context)
   private val scope = MainScope()
@@ -39,6 +39,7 @@ private constructor(
   private val exceptionHandler = CoroutineExceptionHandler { _, t ->
     onInitializationErrorCloseAndCancel(t)
   }
+  private var closed = false
   private lateinit var expirationInstant: Instant
 
 
@@ -145,22 +146,22 @@ private constructor(
 
   @JavascriptInterface
   fun onRunBotguardResult(botguardResponse: String) {
-    Log.d(TAG, "botguardResponse: $botguardResponse")
+    Log.d(TAG, "BotGuard challenge response received")
     makeBotguardServiceRequest(
       "https://www.youtube.com/api/jnn/v1/GenerateIT",
       "[ \"$REQUEST_KEY\", \"$botguardResponse\" ]",
     ) { responseBody ->
-      Log.d(TAG, "GenerateIT response: $responseBody")
+      Log.d(TAG, "Integrity response received")
       try {
         val (integrityToken, expirationTimeInSeconds) = parseIntegrityTokenData(responseBody)
         Log.d(
           TAG,
-          "Parsed integrityToken (${integrityToken.take(50)}...), expires in $expirationTimeInSeconds sec"
+          "Integrity token lifetime: $expirationTimeInSeconds sec"
         )
 
 
         expirationInstant =
-          Instant.now().plusSeconds(expirationTimeInSeconds).minus(10, ChronoUnit.MINUTES)
+          PoTokenLifetime.expiresAt(Instant.now(), expirationTimeInSeconds)
 
 
         Log.d(TAG, "Evaluating createPoTokenMinter JavaScript...")
@@ -195,7 +196,9 @@ private constructor(
   @JavascriptInterface
   fun onMinterCreated() {
     Log.d(TAG, "poToken minter created successfully, initialization complete")
-    continuation.resume(this)
+    scope.launch {
+      if (!closed && continuation.isActive) continuation.resume(this@PoTokenWebView)
+    }
   }
 
 
@@ -203,21 +206,23 @@ private constructor(
   suspend fun generatePoToken(identifier: String): String {
     return withContext(Dispatchers.Main) {
       suspendCancellableCoroutine { cont ->
-        Log.d(TAG, "generatePoToken() called with identifier $identifier")
-        addPoTokenEmitter(identifier, cont)
+        // Each asynchronous callback needs its own key, even for the same video.
+        val requestKey = java.util.UUID.randomUUID().toString()
+        addPoTokenEmitter(requestKey, cont)
+        cont.invokeOnCancellation { popPoTokenContinuation(requestKey) }
         webView.evaluateJavascript(
-          """try {
-                        identifier = "$identifier"
-                        u8Identifier = ${stringToU8(identifier)}
+          """(function () { try {
+                        const requestKey = "$requestKey";
+                        const u8Identifier = ${stringToU8(identifier)};
                         obtainPoToken(u8Identifier).then(function(poTokenU8) {
-                            poTokenU8String = poTokenU8.join(",")
-                            $JS_INTERFACE.onObtainPoTokenResult(identifier, poTokenU8String)
+                            const poTokenU8String = poTokenU8.join(",");
+                            $JS_INTERFACE.onObtainPoTokenResult(requestKey, poTokenU8String);
                         }).catch(function(error) {
-                            $JS_INTERFACE.onObtainPoTokenError(identifier, error + "\n" + (error.stack || ''))
-                        })
+                            $JS_INTERFACE.onObtainPoTokenError(requestKey, error + "\n" + (error.stack || ''));
+                        });
                     } catch (error) {
-                        $JS_INTERFACE.onObtainPoTokenError(identifier, error + "\n" + error.stack)
-                    }""",
+                        $JS_INTERFACE.onObtainPoTokenError("$requestKey", error + "\n" + error.stack);
+                    } })();""",
           null
         )
       }
@@ -242,7 +247,7 @@ private constructor(
 
   @JavascriptInterface
   fun onObtainPoTokenResult(identifier: String, poTokenU8: String) {
-    Log.d(TAG, "Generated poToken (before decoding): identifier=$identifier poTokenU8=$poTokenU8")
+
     val poToken =
       try {
         u8ToBase64(poTokenU8)
@@ -251,7 +256,7 @@ private constructor(
         return
       }
 
-    Log.d(TAG, "Generated poToken: identifier=$identifier poToken=$poToken")
+    Log.d(TAG, "PoToken generated")
     popPoTokenContinuation(identifier)?.resume(poToken)
   }
 
@@ -269,9 +274,11 @@ private constructor(
   }
 
   private fun popAllPoTokenContinuations(): Map<String, Continuation<String>> {
-    val result = poTokenContinuations.toMap()
-    poTokenContinuations.clear()
-    return result
+    return synchronized(poTokenContinuations) {
+      val result = poTokenContinuations.toMap()
+      poTokenContinuations.clear()
+      result
+    }
   }
 
 
@@ -296,29 +303,36 @@ private constructor(
               .toHeaders()
           )
           .url(url)
-      val response =
-        withContext(Dispatchers.IO) { httpClient.newCall(requestBuilder.build()).execute() }
-      val httpCode = response.code
+      val (httpCode, body) = withContext(Dispatchers.IO) {
+        httpClient.newCall(requestBuilder.build()).execute().use { response ->
+          response.code to response.body?.string().orEmpty()
+        }
+      }
       if (httpCode != 200) {
         onInitializationErrorCloseAndCancel(PoTokenException("Invalid response code: $httpCode"))
       } else {
-        val body = withContext(Dispatchers.IO) { response.body!!.string() }
         handleResponseBody(body)
       }
     }
   }
 
   private fun onInitializationErrorCloseAndCancel(error: Throwable) {
-    close()
-    continuation.resumeWithException(error)
+    scope.launch {
+      if (continuation.isActive) continuation.resumeWithException(error)
+      close()
+    }
   }
 
   @MainThread
   fun close() {
+    if (closed) return
+    closed = true
     scope.cancel()
+    popAllPoTokenContinuations().values.forEach {
+      it.resumeWithException(kotlinx.coroutines.CancellationException("PoToken generator closed"))
+    }
 
     webView.clearHistory()
-    webView.clearCache(true)
 
     webView.loadUrl("about:blank")
 
@@ -343,6 +357,9 @@ private constructor(
       return withContext(Dispatchers.Main) {
         suspendCancellableCoroutine { cont ->
           val potWv = PoTokenWebView(context, cont)
+          cont.invokeOnCancellation {
+            android.os.Handler(android.os.Looper.getMainLooper()).post { potWv.close() }
+          }
           potWv.loadHtmlAndObtainBotguard()
         }
       }
