@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.graphics.Bitmap
+import android.view.View
+import android.widget.FrameLayout
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -41,7 +43,15 @@ import android.net.Uri
 @Composable
 internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
     var pageError by remember(videoId) { mutableStateOf<String?>(null) }
-    BackHandler(onBack = onClose)
+    var fullscreenView by remember(videoId) { mutableStateOf<View?>(null) }
+    var fullscreenCallback by remember(videoId) { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    BackHandler {
+        if (fullscreenView != null) {
+            fullscreenCallback?.onCustomViewHidden()
+            fullscreenView = null
+            fullscreenCallback = null
+        } else onClose()
+    }
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -61,7 +71,21 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    webChromeClient = WebChromeClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            if (view == null || fullscreenView != null) {
+                                callback?.onCustomViewHidden()
+                                return
+                            }
+                            fullscreenView = view
+                            fullscreenCallback = callback
+                        }
+
+                        override fun onHideCustomView() {
+                            fullscreenView = null
+                            fullscreenCallback = null
+                        }
+                    }
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                             pageError = null
@@ -87,6 +111,9 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
             }
             DisposableEffect(view) {
                 onDispose {
+                    fullscreenCallback?.onCustomViewHidden()
+                    fullscreenView = null
+                    fullscreenCallback = null
                     view.stopLoading()
                     view.loadUrl("about:blank")
                     view.destroy()
@@ -96,7 +123,22 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                 Text(pageError ?: "", color = Color.White, modifier = Modifier.padding(8.dp))
                 Button(onClick = { pageError = null; view.reload() }) { Text("Retry web player") }
             }
-            AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
+            if (fullscreenView != null) {
+                AndroidView(
+                    factory = { ctx -> FrameLayout(ctx) },
+                    update = { frame ->
+                        val custom = fullscreenView
+                        frame.removeAllViews()
+                        if (custom != null) {
+                            (custom.parent as? android.view.ViewGroup)?.removeView(custom)
+                            frame.addView(custom, FrameLayout.LayoutParams(-1, -1))
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
+            }
         }
     }
 }
