@@ -2,6 +2,8 @@ package com.tensei.ytxtube
 
 import android.annotation.SuppressLint
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.graphics.Bitmap
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -19,6 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -35,6 +40,7 @@ import android.net.Uri
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
+    var pageError by remember(videoId) { mutableStateOf<String?>(null) }
     BackHandler(onBack = onClose)
     Dialog(
         onDismissRequest = onClose,
@@ -57,6 +63,19 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     webChromeClient = WebChromeClient()
                     webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                            pageError = null
+                        }
+                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                            if (request?.isForMainFrame == true) {
+                                pageError = "YouTube page failed to load."
+                            }
+                        }
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            if (url?.startsWith("https://m.youtube.com/") == true) {
+                                view?.evaluateJavascript(AD_STATE_OBSERVER, null)
+                            }
+                        }
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val uri: Uri = request?.url ?: return true
                             val host = uri.host?.lowercase() ?: return true
@@ -73,7 +92,44 @@ internal fun YouTubeWebPlayerDialog(videoId: String, onClose: () -> Unit) {
                     view.destroy()
                 }
             }
+            if (pageError != null) {
+                Text(pageError ?: "", color = Color.White, modifier = Modifier.padding(8.dp))
+                Button(onClick = { pageError = null; view.reload() }) { Text("Retry web player") }
+            }
             AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
         }
     }
 }
+
+private val AD_STATE_OBSERVER = """
+(function () {
+  if (window.__ytubeAdObserver) return;
+  const state = { timer: null, video: null, rate: 1, muted: false };
+  window.__ytubeAdObserver = state;
+  function restore() {
+    if (!state.video) return;
+    try {
+      if (state.video.playbackRate === 4) state.video.playbackRate = state.rate;
+      state.video.muted = state.muted;
+    } catch (_) {}
+    state.video = null;
+  }
+  function check() {
+    const root = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    const video = root && root.querySelector('video');
+    const ad = !!root && (root.classList.contains('ad-showing') || root.classList.contains('ad-interrupting'));
+    if (!ad || !video) { restore(); return; }
+    if (state.video !== video) {
+      restore();
+      state.video = video;
+      state.rate = video.playbackRate;
+      state.muted = video.muted;
+    }
+    try { video.muted = true; video.playbackRate = 4; } catch (_) {}
+  }
+  state.timer = window.setInterval(check, 250);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) restore(); });
+  window.addEventListener('pagehide', function () { restore(); clearInterval(state.timer); });
+  check();
+})();
+""".trimIndent()
