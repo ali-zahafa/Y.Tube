@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set +e
 set -uo pipefail
-timeout --signal=INT --kill-after=30s 1080s ./gradlew :app:connectedDebugAndroidTest --stacktrace
+timeout --signal=INT --kill-after=30s 1080s ./gradlew --no-daemon --max-workers=2 '-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' :app:connectedDebugAndroidTest --stacktrace
 result=$?
 mkdir -p app/build/playback-validation
 timeout 15s adb exec-out run-as com.tensei.ytxtube.preview cat files/youtube-validation.json > app/build/playback-validation/youtube-validation.json || true
