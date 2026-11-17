@@ -786,12 +786,20 @@ internal object YouTubeStreamHttp {
     private const val UA_TV = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15"
 
     fun userAgentForUrl(url: String): String {
-        val clientParam = Regex("[?&]c=([^&]+)").find(url)?.groupValues?.getOrNull(1)?.uppercase().orEmpty()
+        val parsed = Uri.parse(url)
+        val clientParam = parsed.getQueryParameter("c").orEmpty().uppercase()
+        val clientVersion = parsed.getQueryParameter("cver")?.takeIf { it.isNotBlank() }
         return when {
             clientParam == "VISIONOS" -> YoutubeParsingHelper.getVisionOsUserAgent(null)
-            clientParam.contains("IOS") -> UA_IOS
-            clientParam.contains("ANDROID_VR") -> UA_ANDROID_VR
-            clientParam.contains("ANDROID") -> UA_ANDROID
+            clientParam.contains("IOS") -> clientVersion?.let {
+                "com.google.ios.youtube/$it (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)"
+            } ?: UA_IOS
+            clientParam.contains("ANDROID_VR") -> clientVersion?.let {
+                "com.google.android.apps.youtube.vr.oculus/$it (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
+            } ?: UA_ANDROID_VR
+            clientParam.contains("ANDROID") -> clientVersion?.let {
+                "com.google.android.youtube/$it (Linux; U; Android 14) gzip"
+            } ?: UA_ANDROID
             clientParam.contains("TVHTML5") -> UA_TV
             else -> Net.USER_AGENT
         }
@@ -842,8 +850,16 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
     override fun setDrmSessionManagerProvider(provider: DrmSessionManagerProvider): MediaSource.Factory =
         apply { fallback.setDrmSessionManagerProvider(provider) }
 
-    override fun setLoadErrorHandlingPolicy(policy: LoadErrorHandlingPolicy): MediaSource.Factory =
-        apply { fallback.setLoadErrorHandlingPolicy(policy) }
+    override fun setLoadErrorHandlingPolicy(policy: LoadErrorHandlingPolicy): MediaSource.Factory = apply {
+        val recoveryAwarePolicy = object : LoadErrorHandlingPolicy by policy {
+            override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                val status = (info.exception as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                return if (status == 403 || status == 410) C.TIME_UNSET
+                else policy.getRetryDelayMsFor(info)
+            }
+        }
+        fallback.setLoadErrorHandlingPolicy(recoveryAwarePolicy)
+    }
 
     override fun getSupportedTypes(): IntArray = fallback.supportedTypes
 

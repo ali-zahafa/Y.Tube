@@ -8,6 +8,9 @@ import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
 import java.util.concurrent.TimeUnit
+import java.net.Inet4Address
+import okhttp3.Dns
+import java.util.concurrent.ConcurrentHashMap
 
 
 object Net {
@@ -27,6 +30,23 @@ object Net {
             .build()
     }
 
+
+    val mediaClient: OkHttpClient by lazy {
+        client.newBuilder().dns(Dns { hostname ->
+            val addresses = Dns.SYSTEM.lookup(hostname)
+            if (hostname.equals("googlevideo.com", true) || hostname.endsWith(".googlevideo.com", true)) {
+                addresses.sortedBy { if (it is Inet4Address) 0 else 1 }
+            } else addresses
+        }).build()
+    }
+
+    private val mediaUserAgents = ConcurrentHashMap<String, String>()
+    fun registerMediaUserAgent(url: String, userAgent: String) {
+        if (url.isBlank() || userAgent.isBlank()) return
+        if (mediaUserAgents.size > 512) mediaUserAgents.clear()
+        mediaUserAgents[url] = userAgent
+    }
+    fun mediaUserAgent(url: String): String? = mediaUserAgents[url]
 
     @Volatile private var mediaHost: String? = null
 
@@ -126,11 +146,17 @@ class NewPipeDownloader private constructor(private val client: OkHttpClient) : 
 
             if (response.code == 429) throw ReCaptchaException("reCaptcha challenge requested", request.url())
             val text = response.body?.string()
+            val substituted = if (PlayerFallback.handles(request.url())) {
+                PlayerFallback.substitute(request.url(), request.dataToSend(), text)
+            } else text
+            // The extractor must parse the replacement player response, not throw the original
+            // HTTP status after a successful fallback response has been synthesized.
+            val status = if (response.code in 400..499 && substituted != null && substituted != text) 200 else response.code
             return Response(
-                response.code,
-                response.message,
+                status,
+                if (status == 200 && response.code != 200) "OK" else response.message,
                 response.headers.toMultimap(),
-                if (PlayerFallback.handles(request.url())) PlayerFallback.substitute(request.url(), request.dataToSend(), text) else text,
+                substituted,
                 response.request.url.toString(),
             )
         }

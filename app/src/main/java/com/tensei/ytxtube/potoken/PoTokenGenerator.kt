@@ -2,6 +2,7 @@ package com.tensei.ytxtube.potoken
 
 import android.util.Log
 import android.webkit.CookieManager
+import com.tensei.ytxtube.VisitorDataProvider
 import com.tensei.ytxtube.YTXTubeApplication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -13,133 +14,161 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
+internal enum class PoTokenStatus {
+    NOT_REQUESTED,
+    OK,
+    TIMEOUT,
+    WEBVIEW_ERROR,
+    NO_VISITOR_DATA,
+    INVALIDATED,
+}
+
 class PoTokenGenerator {
-  private val TAG = "PoTokenGenerator"
+    private val tag = "PoTokenGenerator"
 
-  private val webViewSupported by lazy { runCatching { CookieManager.getInstance() }.isSuccess }
-  private var webViewBadImpl = false
+    private val webViewSupported by lazy { runCatching { CookieManager.getInstance() }.isSuccess }
+    @Volatile private var webViewBadImpl = false
 
-  private val webPoTokenGenLock = Mutex()
-  private var webPoTokenSessionId: String? = null
-  private var webPoTokenStreamingPot: String? = null
-  private var webPoTokenGenerator: PoTokenWebView? = null
+    private val webPoTokenGenLock = Mutex()
+    private var webPoTokenSessionId: String? = null
+    private var webPoTokenStreamingPot: String? = null
+    private var webPoTokenGenerator: PoTokenWebView? = null
 
-  fun initialize() {
-    if (!webViewSupported || webViewBadImpl) return
-    kotlinx.coroutines.GlobalScope.launch(Dispatchers.Main) {
-      try {
-        webPoTokenGenLock.withLock {
-          if (webPoTokenGenerator == null) {
-            Log.d(TAG, "Pre-initializing PoTokenWebView in background...")
-            webPoTokenSessionId = "init-" + System.currentTimeMillis()
-            webPoTokenGenerator =
-              PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
-            webPoTokenStreamingPot = webPoTokenGenerator!!.generatePoToken(webPoTokenSessionId!!)
-          }
+    @Volatile
+    var lastStatus: PoTokenStatus = PoTokenStatus.NOT_REQUESTED
+        private set
+
+    /**
+     * Warm the WebView with the same genuine visitorData that will be used by the player request.
+     * Network work stays off the main thread; WebView work is marshalled to Main by PoTokenWebView.
+     */
+    fun initialize() {
+        if (!webViewSupported || webViewBadImpl) return
+        GlobalScope.launch(Dispatchers.IO) {
+            val sessionId = VisitorDataProvider.getOrFetch() ?: return@launch
+            runCatching {
+                webPoTokenGenLock.withLock {
+                    if (webPoTokenGenerator == null ||
+                        webPoTokenGenerator!!.isExpired ||
+                        webPoTokenSessionId != sessionId
+                    ) {
+                        val old = webPoTokenGenerator
+                        webPoTokenGenerator = null
+                        webPoTokenStreamingPot = null
+                        webPoTokenSessionId = null
+                        withContext(Dispatchers.Main) { old?.close() }
+
+                        val created = PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
+                        val streamingToken = created.generatePoToken(sessionId)
+                        webPoTokenGenerator = created
+                        webPoTokenSessionId = sessionId
+                        webPoTokenStreamingPot = streamingToken
+                    }
+                }
+            }.onFailure {
+                lastStatus = PoTokenStatus.WEBVIEW_ERROR
+                Log.w(tag, "PoToken pre-initialization failed: ${it.javaClass.simpleName}")
+            }
         }
-      } catch (e: Exception) {
-        Log.e(TAG, "Failed to pre-initialize PoTokenWebView", e)
-      }
     }
-  }
 
-  fun getWebClientPoToken(videoId: String, sessionId: String): PoTokenResult? {
-    Log.d(TAG, "getWebClientPoToken called: videoId=$videoId, sessionId=$sessionId")
-    Log.d(TAG, "WebView state: supported=$webViewSupported, badImpl=$webViewBadImpl")
-    if (!webViewSupported || webViewBadImpl) {
-      Log.d(TAG, "WebView not available: supported=$webViewSupported, badImpl=$webViewBadImpl")
-      return null
+    fun getWebClientPoToken(videoId: String, sessionId: String): PoTokenResult? {
+        if (sessionId.isBlank()) {
+            lastStatus = PoTokenStatus.NO_VISITOR_DATA
+            return null
+        }
+        if (!webViewSupported || webViewBadImpl) {
+            lastStatus = PoTokenStatus.WEBVIEW_ERROR
+            return null
+        }
+
+        return try {
+            val result = runBlocking {
+                withTimeout(POTOKEN_TIMEOUT_MS) {
+                    generateForSession(videoId, sessionId, forceRecreate = false)
+                }
+            }
+            lastStatus = PoTokenStatus.OK
+            result
+        } catch (_: TimeoutCancellationException) {
+            lastStatus = PoTokenStatus.TIMEOUT
+            GlobalScope.launch(Dispatchers.IO) { invalidate() }
+            Log.w(tag, "PoToken generation timed out")
+            null
+        } catch (error: Exception) {
+            lastStatus = PoTokenStatus.WEBVIEW_ERROR
+            if (error is BadWebViewException) webViewBadImpl = true
+            Log.w(tag, "PoToken generation failed: ${error.javaClass.simpleName}")
+            null
+        }
     }
 
-    return try {
-      Log.d(TAG, "Calling runBlocking to generate poToken (timeout=${POTOKEN_TIMEOUT_MS}ms)...")
-      runBlocking {
-        withTimeout(POTOKEN_TIMEOUT_MS) {
-          getWebClientPoToken(videoId, sessionId, forceRecreate = false)
+    /**
+     * Clears the generator and its visitor-bound streaming token. Call from a worker coroutine
+     * after a rejected stream; the next request creates a fresh WebView session.
+     */
+    suspend fun invalidate() {
+        val old = webPoTokenGenLock.withLock {
+            val current = webPoTokenGenerator
+            webPoTokenGenerator = null
+            webPoTokenStreamingPot = null
+            webPoTokenSessionId = null
+            current
         }
-      }
-    } catch (e: TimeoutCancellationException) {
-      Log.w(TAG, "poToken generation timed out after ${POTOKEN_TIMEOUT_MS}ms; proceeding without PoToken")
-      runBlocking {
-        webPoTokenGenLock.withLock {
-          try {
-            withContext(Dispatchers.Main) { webPoTokenGenerator?.close() }
-          } catch (closeEx: Exception) {
-            Log.e(TAG, "Exception closing PoTokenWebView during timeout cleanup", closeEx)
-          }
-          webPoTokenGenerator = null
-          webPoTokenStreamingPot = null
-          webPoTokenSessionId = null
-        }
-      }
-      null
-    } catch (e: Exception) {
-      Log.e(TAG, "poToken generation exception: ${e.javaClass.simpleName}: ${e.message}", e)
-      when (e) {
-        is BadWebViewException -> {
-          Log.e(TAG, "Could not obtain poToken because WebView is broken", e)
-          webViewBadImpl = true
-          null
-        }
-        else -> throw e
-      }
+        withContext(Dispatchers.Main) { old?.close() }
+        webViewBadImpl = false
+        lastStatus = PoTokenStatus.INVALIDATED
     }
-  }
 
-  private companion object {
-    const val POTOKEN_TIMEOUT_MS = 8_000L
-  }
+    private suspend fun generateForSession(
+        videoId: String,
+        sessionId: String,
+        forceRecreate: Boolean,
+    ): PoTokenResult {
+        val (generator, streamingToken, recreated) = webPoTokenGenLock.withLock {
+            val shouldRecreate = forceRecreate ||
+                webPoTokenGenerator == null ||
+                webPoTokenGenerator!!.isExpired ||
+                webPoTokenSessionId != sessionId
 
-  private suspend fun getWebClientPoToken(
-    videoId: String,
-    sessionId: String,
-    forceRecreate: Boolean
-  ): PoTokenResult {
-    Log.d(TAG, "Web poToken requested: videoId=$videoId, sessionId=$sessionId")
+            if (shouldRecreate) {
+                val old = webPoTokenGenerator
+                webPoTokenGenerator = null
+                webPoTokenStreamingPot = null
+                webPoTokenSessionId = null
+                withContext(Dispatchers.Main) { old?.close() }
 
-    val (poTokenGenerator, streamingPot, hasBeenRecreated) =
-      webPoTokenGenLock.withLock {
-        val shouldRecreate =
-          forceRecreate ||
-            webPoTokenGenerator == null ||
-            webPoTokenGenerator!!.isExpired ||
-            webPoTokenSessionId != sessionId
+                val created = PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
+                val streaming = created.generatePoToken(sessionId)
+                webPoTokenGenerator = created
+                webPoTokenSessionId = sessionId
+                webPoTokenStreamingPot = streaming
+            }
 
-        if (shouldRecreate) {
-          Log.d(TAG, "Creating new PoTokenWebView (forceRecreate=$forceRecreate)")
-          webPoTokenSessionId = sessionId
-
-          withContext(Dispatchers.Main) { webPoTokenGenerator?.close() }
-
-
-          webPoTokenGenerator = PoTokenWebView.getNewPoTokenGenerator(YTXTubeApplication.appContext)
-
-
-
-          webPoTokenStreamingPot = webPoTokenGenerator!!.generatePoToken(webPoTokenSessionId!!)
-          Log.d(TAG, "Streaming poToken generated for sessionId=${webPoTokenSessionId?.take(20)}...")
+            Triple(
+                requireNotNull(webPoTokenGenerator),
+                requireNotNull(webPoTokenStreamingPot),
+                shouldRecreate,
+            )
         }
 
-        Triple(webPoTokenGenerator!!, webPoTokenStreamingPot!!, shouldRecreate)
-      }
-
-    val playerPot =
-      try {
-        poTokenGenerator.generatePoToken(videoId)
-      } catch (throwable: Throwable) {
-        if (hasBeenRecreated) {
-          throw throwable
-        } else {
-          Log.e(TAG, "Failed to obtain poToken, retrying", throwable)
-          return getWebClientPoToken(videoId = videoId, sessionId = sessionId, forceRecreate = true)
+        val playerToken = try {
+            generator.generatePoToken(videoId)
+        } catch (error: Throwable) {
+            if (recreated) throw error
+            Log.w(tag, "Player PoToken generation failed; recreating WebView once")
+            return generateForSession(videoId, sessionId, forceRecreate = true)
         }
-      }
 
-    Log.d(TAG, "poToken generated successfully: session=${streamingPot.take(20)}..., video=${playerPot.take(20)}...")
+        // Never log token contents: both tokens are bearer-like session material.
+        Log.d(tag, "PoToken generated for video and visitor session")
+        return PoTokenResult(
+            playerRequestPoToken = playerToken,
+            streamingDataPoToken = streamingToken,
+        )
+    }
 
-    return PoTokenResult(
-      playerRequestPoToken = playerPot,
-      streamingDataPoToken = streamingPot,
-    )
-  }
+    private companion object {
+        const val POTOKEN_TIMEOUT_MS = 12_000L
+    }
 }

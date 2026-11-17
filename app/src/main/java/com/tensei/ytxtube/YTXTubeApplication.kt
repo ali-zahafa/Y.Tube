@@ -14,6 +14,9 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
     companion object {
         lateinit var appContext: Context
             private set
+
+        lateinit var poTokenGenerator: PoTokenGenerator
+            private set
     }
 
     override fun onCreate() {
@@ -26,9 +29,9 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
         NetworkSpeed.init(this)
         PlaybackBandwidth.init(this)
         NewPipe.init(NewPipeDownloader.instance)
+        Account.init(this)
 
-
-        val poTokenGenerator = PoTokenGenerator()
+        poTokenGenerator = PoTokenGenerator()
         poTokenGenerator.initialize()
         YoutubeStreamExtractor.setPoTokenProvider(YtxPoTokenProvider(poTokenGenerator))
 
@@ -49,7 +52,6 @@ class YTXTubeApplication : Application(), ImageLoaderFactory {
         MiniPlayerSettings.init(this)
         ResumeStore.init(this)
         WatchHistory.init(this)
-        Account.init(this)
         SponsorBlock.init(this)
         SearchHistory.init(this)
         Downloads.init(this)
