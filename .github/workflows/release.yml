@@ -7,6 +7,10 @@ on:
         description: Publish this verified tag and APK to GitHub Releases
         type: boolean
         default: false
+  push:
+    branches: [main]
+    paths:
+      - 'app/build.gradle.kts'
 
 permissions:
   contents: read
@@ -80,7 +84,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: inputs.publish && github.ref_type == 'tag'
+    if: (inputs.publish && github.ref_type == 'tag') || github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -96,13 +100,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          apk="Y.Tube-$GITHUB_REF_NAME.apk"
-          notes="docs/releases/$GITHUB_REF_NAME.md"
+          version="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)"/\\1/p' app/build.gradle.kts | head -n1)"
+          [[ "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]
+          tag="v$version"
+          apk="Y.Tube-$tag.apk"
+          notes="docs/releases/$tag.md"
           release_notes=(--generate-notes)
           if [[ -f "$notes" ]]; then release_notes=(--notes-file "$notes"); fi
-          gh release create "$GITHUB_REF_NAME" "release/$apk" \
-            --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Y.Tube $GITHUB_REF_NAME" "${release_notes[@]}"
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "$apk" --dir downloaded
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "release/$apk" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "release/$apk" \
+              --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+              --title "Y.Tube $version" "${release_notes[@]}"
+          fi
+
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$apk" --dir downloaded
           cmp "release/$apk" "downloaded/$apk"
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json url,isDraft,assets
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url,isDraft,assets
