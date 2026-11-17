@@ -13,8 +13,8 @@ android {
         applicationId = "com.tensei.ytxtube"
         minSdk = 24
         targetSdk = 34
-        versionCode = 251
-        versionName = "2.5.1"
+        versionCode = 252
+        versionName = "2.5.2"
     }
 
     val releaseKeystore = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE").orNull
