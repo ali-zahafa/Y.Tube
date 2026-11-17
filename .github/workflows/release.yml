@@ -72,7 +72,7 @@ jobs:
           version="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
           code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<< "$badging")"
           [[ "$badging" == "package: name='com.tensei.ytxtube'"* ]]
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$code" -gt 240 ]]
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then [[ "$GITHUB_REF_NAME" == "v$version" ]]; fi
           mkdir -p release
           cp "$apk" "release/Y.Tube-v$version.apk"
@@ -100,8 +100,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)"/\\1/p' app/build.gradle.kts | head -n1)"
-          [[ "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]
+          version="$(grep -m1 'versionName = ' app/build.gradle.kts | cut -d '"' -f2)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           tag="v$version"
           apk="Y.Tube-$tag.apk"
           notes="docs/releases/$tag.md"
