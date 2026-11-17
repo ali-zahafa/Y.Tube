@@ -33,6 +33,39 @@ object PlayerFallback {
     private val sourceMetadata = ConcurrentHashMap<String, SourceMetadata>()
     private val cacheGenerations = StreamCacheGeneration()
 
+
+    data class DirectStreams(
+        val videoUrl: String?,
+        val audioUrl: String?,
+        val muxedUrl: String?,
+        val hlsUrl: String?,
+    )
+
+    /** Playable URLs from the Innertube response; never require a second NewPipe extraction. */
+    fun directStreams(videoId: String): DirectStreams? {
+        val saved = cache[videoId]?.takeIf { System.currentTimeMillis() - it.at < CACHE_MS }
+            ?: return null
+        val streaming = saved.answer.optJSONObject("streamingData") ?: return null
+        fun urls(key: String): List<JSONObject> {
+            val array = streaming.optJSONArray(key) ?: return emptyList()
+            return (0 until array.length()).mapNotNull(array::optJSONObject)
+                .filter { it.optString("url").startsWith("https://") }
+        }
+        fun bitrate(item: JSONObject) = item.optLong("bitrate", 0L)
+        val muxed = urls("formats").maxByOrNull(::bitrate)?.optString("url")
+        val adaptive = urls("adaptiveFormats")
+        val videos = adaptive.filter { it.optString("mimeType").startsWith("video/") }
+        val audios = adaptive.filter { it.optString("mimeType").startsWith("audio/") }
+        val video = videos.maxByOrNull(::bitrate)?.optString("url")
+        val audio = audios.maxByOrNull(::bitrate)?.optString("url")
+        val hls = streaming.optString("hlsManifestUrl").takeIf { it.startsWith("https://") }
+        if (muxed == null && video == null && hls == null) return null
+        listOfNotNull(muxed, video, audio, hls).forEach {
+            Net.registerMediaUserAgent(it, saved.source.userAgent)
+        }
+        return DirectStreams(video, audio, muxed, hls)
+    }
+
     fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
     fun invalidate(videoId: String) {
         cacheGenerations.invalidate(videoId)
