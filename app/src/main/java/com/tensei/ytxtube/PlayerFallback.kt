@@ -199,7 +199,6 @@ object PlayerFallback {
     private fun hasPlayableStreams(player: JSONObject): Boolean {
         val streaming = player.optJSONObject("streamingData") ?: return false
         if ((streaming.opt("hlsManifestUrl") as? String)?.isNotBlank() == true) return true
-        if ((streaming.opt("dashManifestUrl") as? String)?.isNotBlank() == true) return true
         return listOf("formats", "adaptiveFormats").any { key ->
             val formats = streaming.optJSONArray(key) ?: return@any false
             (0 until formats.length()).any { index ->
