@@ -149,7 +149,7 @@ class PlayerState(private val scope: CoroutineScope) {
     init {
 
         scope.launch {
-            snapshotFlow { StreamRecovery.recovering to StreamRecovery.failed }.collect { (_, failed) ->
+            snapshotFlow { Triple(StreamRecovery.recovering, StreamRecovery.failed, current?.id) }.collect { (_, failed, _) ->
                 syncFromPlayer()
                 if (failed != null && failed.first == current?.id) {
                     error = failed.second
