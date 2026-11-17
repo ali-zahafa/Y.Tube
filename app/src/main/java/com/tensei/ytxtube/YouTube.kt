@@ -474,13 +474,13 @@ object StreamCache {
     fun get(id: String): StreamInfo? =
         entries[id]?.takeIf { System.currentTimeMillis() - it.loadedAt < MAX_AGE_MS }?.info
 
-    fun getOrLoad(id: String, forceClientFallback: Boolean = false): StreamInfo {
+    fun getOrLoad(id: String, forceClientFallback: Boolean = false, fallbackClientIndex: Int = 0): StreamInfo {
         if (!forceClientFallback) get(id)?.let { return it }
 
         if (forceClientFallback) {
             entries.remove(id)
             inflight.remove(id)?.cancel(false)
-            check(PlayerFallback.forceClientFallback(id)) {
+            check(PlayerFallback.forceClientFallback(id, fallbackClientIndex)) {
                 "No playable stream was returned by ANDROID_VR, TVHTML5, iOS, or WEB fallback"
             }
         }
