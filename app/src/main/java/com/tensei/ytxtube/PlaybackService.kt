@@ -873,7 +873,9 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
     override fun setLoadErrorHandlingPolicy(policy: LoadErrorHandlingPolicy): MediaSource.Factory = apply {
         val recoveryAwarePolicy = object : LoadErrorHandlingPolicy by policy {
             override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-                val status = (info.exception as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                val status = generateSequence(info.exception as Throwable?) { it.cause }
+                    .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+                    .firstOrNull()?.responseCode
                 return if (status == 403 || status == 410) C.TIME_UNSET
                 else policy.getRetryDelayMsFor(info)
             }
@@ -890,6 +892,22 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
     private fun buildSource(mediaItem: MediaItem): MediaSource {
         if (mediaItem.localConfiguration?.uri?.scheme == "file") {
             return fallback.createMediaSource(mediaItem)
+        }
+        PlayerFallback.directStreams(mediaItem.mediaId)?.let { direct ->
+            val hls = direct.hlsUrl
+            if (direct.muxedUrl == null && (direct.videoUrl == null || direct.audioUrl == null) && hls != null) {
+                return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
+            }
+            if (direct.videoUrl != null && direct.audioUrl != null) {
+                return MergingMediaSource(
+                    true,
+                    true,
+                    directSource(direct.videoUrl, mediaItem),
+                    directSource(direct.audioUrl, mediaItem),
+                )
+            }
+            if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem)
+            if (hls != null) return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
         }
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
@@ -912,7 +930,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
 
         if (picked.video == null && picked.muxed == null && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: no progressive streams, falling back to HLS")
-            return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
+            return hlsFactory().createMediaSource(
                 MediaItem.Builder()
                     .setUri(hlsUrl)
                     .setMediaId(mediaItem.mediaId)
@@ -943,6 +961,11 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             else -> fallback.createMediaSource(mediaItem)
         }
     }
+
+    private fun directSource(url: String, mediaItem: MediaItem): MediaSource =
+        ProgressiveMediaSource.Factory(dataSourceFactory)
+            .also { factory -> recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy) }
+            .createMediaSource(mediaItem.buildUpon().setUri(url).build())
 
     private fun hlsFactory(): HlsMediaSource.Factory =
         HlsMediaSource.Factory(dataSourceFactory).also { factory ->

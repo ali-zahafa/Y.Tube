@@ -91,21 +91,20 @@ internal class StreamRecoverer(
                         StreamCache.getOrLoad(id)
                         StreamRecovery.setRoute(id, StreamRecovery.Route.DirectProgressive)
                     }
-                    3 -> {
-                        StreamCache.invalidate(id)
-                        val info = StreamCache.getOrLoad(id, forceClientFallback = true, fallbackClientIndex = 0)
-                        StreamRecovery.setRoute(
-                            id,
-                            if (!info.hlsUrl.isNullOrBlank()) StreamRecovery.Route.Hls
-                            else StreamRecovery.Route.DirectProgressive,
-                        )
-                    }
                     else -> {
+                        evictFailedCache(id)
                         StreamCache.invalidate(id)
-                        val info = StreamCache.getOrLoad(id, forceClientFallback = true, fallbackClientIndex = stage - 3)
+                        val clientIndex = stage - 3
+                        check(PlayerFallback.forceClientFallback(id, clientIndex)) {
+                            "No playable direct stream from fallback clients"
+                        }
+                        val direct = checkNotNull(PlayerFallback.directStreams(id)) {
+                            "Fallback player response contained no supported direct URLs"
+                        }
                         StreamRecovery.setRoute(
                             id,
-                            if (!info.hlsUrl.isNullOrBlank()) StreamRecovery.Route.Hls
+                            if (direct.hlsUrl != null && direct.videoUrl == null && direct.muxedUrl == null)
+                                StreamRecovery.Route.Hls
                             else StreamRecovery.Route.DirectProgressive,
                         )
                     }
