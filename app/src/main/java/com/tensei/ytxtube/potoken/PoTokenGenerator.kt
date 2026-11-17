@@ -35,7 +35,7 @@ class PoTokenGenerator {
     private var webPoTokenGenerator: PoTokenWebView? = null
 
     @Volatile
-    var lastStatus: PoTokenStatus = PoTokenStatus.NOT_REQUESTED
+    internal var lastStatus: PoTokenStatus = PoTokenStatus.NOT_REQUESTED
         private set
 
     /**

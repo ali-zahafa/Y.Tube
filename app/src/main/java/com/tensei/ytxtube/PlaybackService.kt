@@ -25,6 +25,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -158,7 +159,7 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
 
-        player.addListener(StreamRecoverer(player, sources, resolver))
+        player.addListener(StreamRecoverer(player, sources, resolver, mediaCache))
         networkRecoverer = NetworkRecoverer(this, player).also(player::addListener)
         resumeSaver = ResumeSaver(player).also(player::addListener)
         historyTracker = WatchHistoryTracker(player)

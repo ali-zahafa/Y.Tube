@@ -101,7 +101,7 @@ internal class StreamRecoverer(
                     else -> {
                         StreamCache.invalidate(id)
                         check(PlayerFallback.forceClientFallback(id, 1)) { "TVHTML5 fallback unavailable" }
-                        val info = StreamCache.getOrLoad(id, forceClientFallback = true)
+                        val info = StreamCache.getOrLoad(id, forceClientFallback = true, fallbackClientIndex = 1)
                         StreamRecovery.setRoute(
                             id,
                             if (!info.hlsUrl.isNullOrBlank()) StreamRecovery.Route.Hls

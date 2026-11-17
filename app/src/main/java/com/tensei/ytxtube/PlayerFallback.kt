@@ -200,8 +200,6 @@ object PlayerFallback {
             .put("contentCheckOk", true)
             .put("racyCheckOk", true)
             .apply {
-                val cookies = Account.cookieHeader()
-                if (cookies.isNotBlank()) header("Cookie", cookies)
                 if (cfg.name == "WEB_EMBEDDED_PLAYER") {
                     put("thirdPartyEmbedUrl", "https://www.youtube.com/embed/$videoId")
                 }
@@ -215,6 +213,8 @@ object PlayerFallback {
             .header("X-YouTube-Client-Name", cfg.id)
             .header("X-YouTube-Client-Version", cfg.version)
             .apply {
+                val cookies = Account.cookieHeader()
+                if (cookies.isNotBlank()) header("Cookie", cookies)
                 if (cfg.name == "WEB_EMBEDDED_PLAYER") {
                     header("Origin", "https://www.youtube.com")
                     header("Referer", "https://www.youtube.com/embed/$videoId")

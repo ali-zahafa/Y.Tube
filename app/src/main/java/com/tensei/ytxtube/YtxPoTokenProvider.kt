@@ -16,7 +16,7 @@ class YtxPoTokenProvider(private val generator: PoTokenGenerator) : PoTokenProvi
             val visitorData = VisitorDataProvider.getOrFetch()
             if (visitorData.isNullOrBlank()) {
                 Log.w(TAG, "No valid visitorData available; WEB PoToken was not requested")
-                return generator.getWebClientPoToken(videoId, "")
+                return null
             }
 
             val result = generator.getWebClientPoToken(videoId, visitorData) ?: return null
