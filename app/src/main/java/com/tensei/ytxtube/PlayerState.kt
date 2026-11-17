@@ -154,6 +154,9 @@ class PlayerState(private val scope: CoroutineScope) {
                 if (failed != null && failed.first == current?.id) {
                     error = failed.second
                     isBuffering = false
+                    // Direct stream recovery is exhausted. Use the website player
+                    // instead of leaving the user on a permanent HTTP 403 screen.
+                    if (!webPlayerEnabled) switchWebPlayer(true)
                 }
             }
         }
@@ -1369,6 +1372,15 @@ class PlayerState(private val scope: CoroutineScope) {
                 .firstOrNull()?.responseCode
             Log.w(TAG, "playback error ${e.errorCodeName}${status?.let { " (HTTP $it)" } ?: ""} for ${current?.id}", e)
 
+            if (status == 403 || status == 410) {
+                // StreamRecoverer handles retries and the final web fallback.
+                // Avoid showing a premature error while recovery is in progress.
+                if (StreamRecovery.recovering == current?.id) return
+                errorFromPlayback = true
+                error = "Direct stream unavailable (HTTP $status). Opening YouTube web player."
+                if (!webPlayerEnabled) switchWebPlayer(true)
+                return
+            }
             if (e.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && StreamRecovery.recovering == current?.id) return
             errorFromPlayback = true
             error = when (e.errorCode) {
