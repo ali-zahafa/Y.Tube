@@ -39,7 +39,7 @@ object PlayerFallback {
     fun lastFailureReason(videoId: String): String? = failureReasons[videoId]
     fun lastAttemptMetadata(videoId: String): SourceMetadata? = attemptedMetadata[videoId]
     internal fun mediaContext(videoId: String): FallbackMediaContext? = cache[videoId]?.let {
-        FallbackMediaContext(it.source.userAgent, it.streamingPoToken)
+        FallbackMediaContext(it.source.userAgent, it.streamingPoToken, it.source.clientName)
     }
 
 

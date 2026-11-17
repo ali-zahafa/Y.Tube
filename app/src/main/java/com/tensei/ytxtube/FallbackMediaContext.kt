@@ -3,7 +3,8 @@ package com.tensei.ytxtube
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Immutable per-video request context, shared by its manifest and segment loaders. */
-internal class FallbackMediaContext(val userAgent: String, private val streamingPoToken: String?) {
+internal class FallbackMediaContext(val userAgent: String, private val streamingPoToken: String?,
+    val clientName: String? = null) {
     fun mediaUrl(url: String): String {
         val parsed = url.toHttpUrlOrNull() ?: return url
         val trusted = parsed.host == "googlevideo.com" || parsed.host.endsWith(".googlevideo.com") ||

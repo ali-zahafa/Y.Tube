@@ -822,7 +822,8 @@ internal object YouTubeStreamHttp {
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
                         val clientName = Uri.parse(url).getQueryParameter("c")?.uppercase().orEmpty()
-                        val isWebClient = clientName == "WEB" || clientName == "MWEB" ||
+                        val isWebClient = mediaContext?.clientName in setOf("WEB", "MWEB", "WEB_EMBEDDED_PLAYER") ||
+                            clientName == "WEB" || clientName == "MWEB" ||
                             clientName == "WEB_EMBEDDED_PLAYER" || (clientName.isBlank() && ua == Net.USER_AGENT)
                         if (isWebClient) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
