@@ -7,10 +7,6 @@ on:
         description: Publish this verified tag and APK to GitHub Releases
         type: boolean
         default: false
-  push:
-    branches: [main]
-    paths:
-      - 'app/build.gradle.kts'
 
 permissions:
   contents: read
@@ -39,10 +35,10 @@ jobs:
       - name: Build and verify signed APK
         shell: bash
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.YTUBE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.YTUBE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.YTUBE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.YTUBE_KEY_PASSWORD }}
           EXPECTED_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
         run: |
           set -euo pipefail
@@ -84,7 +80,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: (inputs.publish && github.ref_type == 'tag') || github.event_name == 'push'
+    if: inputs.publish && github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
     permissions:
