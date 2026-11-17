@@ -893,6 +893,22 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         if (mediaItem.localConfiguration?.uri?.scheme == "file") {
             return fallback.createMediaSource(mediaItem)
         }
+        PlayerFallback.directStreams(mediaItem.mediaId)?.let { direct ->
+            val hls = direct.hlsUrl
+            if (direct.muxedUrl == null && (direct.videoUrl == null || direct.audioUrl == null) && hls != null) {
+                return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
+            }
+            if (direct.videoUrl != null && direct.audioUrl != null) {
+                return MergingMediaSource(
+                    true,
+                    true,
+                    directSource(direct.videoUrl, mediaItem),
+                    directSource(direct.audioUrl, mediaItem),
+                )
+            }
+            if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem)
+            if (hls != null) return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
+        }
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
@@ -945,6 +961,11 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             else -> fallback.createMediaSource(mediaItem)
         }
     }
+
+    private fun directSource(url: String, mediaItem: MediaItem): MediaSource =
+        ProgressiveMediaSource.Factory(dataSourceFactory)
+            .also { factory -> recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy) }
+            .createMediaSource(mediaItem.buildUpon().setUri(url).build())
 
     private fun hlsFactory(): HlsMediaSource.Factory =
         HlsMediaSource.Factory(dataSourceFactory).also { factory ->
