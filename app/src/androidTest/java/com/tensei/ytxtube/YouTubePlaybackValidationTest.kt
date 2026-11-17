@@ -20,7 +20,15 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class YouTubePlaybackValidationTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
-    private fun main(block: () -> Unit) = instrumentation.runOnMainSync(block)
+    private fun main(block: () -> Unit) {
+        val done = CountDownLatch(1)
+        var failure: Throwable? = null
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try { block() } catch (error: Throwable) { failure = error } finally { done.countDown() }
+        }
+        assertTrue("App UI thread did not respond within 15 seconds", done.await(15, TimeUnit.SECONDS))
+        failure?.let { throw it }
+    }
     private fun evaluate(view: WebView, script: String): String? {
         val done = CountDownLatch(1)
         var answer: String? = null
@@ -32,21 +40,24 @@ class YouTubePlaybackValidationTest {
         for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
             val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), action, x, y, 0)
             event.source = InputDevice.SOURCE_TOUCHSCREEN
-            instrumentation.sendPointerSync(event)
+            assertTrue("Input injection failed", instrumentation.uiAutomation.injectInputEvent(event, false))
             event.recycle()
         }
     }
 
-    @Test fun reportedVideosPlayContentBeyondTheOneMinuteBoundary() {
+    @Test(timeout = 840_000) fun reportedVideosPlayContentBeyondTheOneMinuteBoundary() {
         val context = instrumentation.targetContext
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, "android.permission.POST_NOTIFICATIONS")
         val results = JSONArray()
+        instrumentation.uiAutomation.executeShellCommand("wm dismiss-keyguard").close()
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         var state: PlayerState? = null
+        var activity: MainActivity? = null
+        scenario.onActivity { activity = it }
         try {
             val connectUntil = SystemClock.elapsedRealtime() + 30_000
             while (state?.controller == null && SystemClock.elapsedRealtime() < connectUntil) {
-                scenario.onActivity { state = it.playerHolder }
+                main { state = activity?.playerHolder }
                 Thread.sleep(250)
             }
             assertTrue("App media controller did not connect", state?.controller != null)
@@ -84,7 +95,7 @@ class YouTubePlaybackValidationTest {
                             const b=Array.from(document.querySelectorAll('button')).find(x=>/^play( video)?$/i.test(x.getAttribute('aria-label')||''));
                             const r=(b||v)?.getBoundingClientRect();
                             return JSON.stringify({t:v?.currentTime||0,playing:!!v&&!v.paused&&!v.ended&&v.videoWidth>0,ad:ad,
-                            error:(e?.innerText||'').slice(0,240),scale:window.devicePixelRatio||1,x:r?r.x+r.width/2:0,y:r?r.y+r.height/2:0});})();
+                            error:(e?.innerText||(!v?document.body?.innerText:'')||'').slice(0,240),scale:window.devicePixelRatio||1,x:r?r.x+r.width/2:0,y:r?r.y+r.height/2:0});})();
                         """.trimIndent())
                         val decoded = raw?.let { runCatching { JSONTokener(it).nextValue() as? String }.getOrNull() }
                         val page = decoded?.let { runCatching { JSONObject(it) }.getOrNull() }
@@ -114,6 +125,7 @@ class YouTubePlaybackValidationTest {
                     .put("content_played_ms", playedMs).put("route", route).put("position_ms", observedPosition)
                     .put("web_error", webError)
                 main {
+                    result.put("native_error", state!!.controller?.playerError?.errorCodeName.orEmpty())
                     result.put("app_error", state!!.error.orEmpty())
                         .put("fallback_reason", PlayerFallback.lastFailureReason(id).orEmpty())
                         .put("client", PlayerFallback.lastAttemptMetadata(id)?.clientName.orEmpty())
@@ -126,8 +138,8 @@ class YouTubePlaybackValidationTest {
             assertTrue("One or more real YouTube videos failed; see youtube-validation.json. No verified APK may be published.",
                 (0 until results.length()).all { results.getJSONObject(it).getBoolean("passed") })
         } finally {
-            main { state?.close() }
-            scenario.close()
+            val responsive = runCatching { main { state?.close(); activity?.finish() } }.isSuccess
+            if (responsive) scenario.close()
         }
     }
 }

@@ -262,7 +262,7 @@ object YouTube {
             related = info.relatedItems.filterIsInstance<StreamInfoItem>().mapNotNull { it.toVideoItem() }.let { list ->
                 if (list.isNotEmpty()) list else fetchFallbackRelated(id, info.name)
             },
-            playable = picked.isPlayable,
+            playable = picked.isPlayable || PlayerFallback.directStreams(id) != null,
             quality = picked.playedHeight?.let { "${it}p${if (picked.hdr) " HDR" else ""}" }
                 ?: if (isLive) "Live" else null,
             qualities = StreamSelection.heights(info),

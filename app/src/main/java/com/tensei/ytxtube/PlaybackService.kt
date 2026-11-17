@@ -348,7 +348,7 @@ class PlaybackService : MediaSessionService() {
             if (resolving != null) return
             val task = resolver.submit<MediaItem> {
                 if (next.mediaMetadata.extras?.getString("local_uri") == null) {
-                    StreamCache.getOrLoad(next.mediaId)
+                    if (PlayerFallback.directStreams(next.mediaId) == null) StreamCache.getOrLoad(next.mediaId)
                 }
                 playableItem(next)
             }
@@ -491,13 +491,13 @@ class PlaybackService : MediaSessionService() {
                         )
                         .build()
                 } else {
-                    val info = StreamCache.getOrLoad(item.mediaId)
+                    val info = if (PlayerFallback.directStreams(item.mediaId) == null) StreamCache.getOrLoad(item.mediaId) else null
                     item.buildUpon()
                         .setUri(YouTube.watchUrl(item.mediaId))
                         .setMediaMetadata(
                             item.mediaMetadata.buildUpon()
-                                .setTitle(item.mediaMetadata.title ?: info.name)
-                                .setArtist(item.mediaMetadata.artist ?: info.uploaderName)
+                                .setTitle(item.mediaMetadata.title ?: info?.name)
+                                .setArtist(item.mediaMetadata.artist ?: info?.uploaderName)
                                 .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
                                 .build(),
                         )
