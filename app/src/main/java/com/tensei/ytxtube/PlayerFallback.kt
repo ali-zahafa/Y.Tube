@@ -165,9 +165,9 @@ object PlayerFallback {
         ClientConfig("WEB_EMBEDDED_PLAYER", "56", "2.20260708.00.00",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Windows", "10.0", "", "", "DESKTOP"),
-        ClientConfig("ANDROID_VR", "28", "1.65.10",
-            "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-            "Android", "12L", "Oculus", "Quest 3", "MOBILE"),
+        ClientConfig("WEB", "1", "2.20260708.00.00",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
+            "Macintosh", "10.15.7", "Apple", "", "DESKTOP"),
         ClientConfig("TVHTML5", "7", "7.20260213.00.00",
             "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15",
             "Tizen", "4.0.0.2", "Samsung", "SmartTV", "TV"),
@@ -273,7 +273,7 @@ object PlayerFallback {
             .put("gl", "US")
         val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
         visitorData?.let { client.put("visitorData", it) }
-        val poTokens = if (cfg.name == "WEB_EMBEDDED_PLAYER" && visitorData != null) {
+        val poTokens = if (cfg.name in setOf("WEB", "WEB_EMBEDDED_PLAYER") && visitorData != null) {
             YTXTubeApplication.poTokenGenerator.getWebClientPoToken(videoId, visitorData)
         } else null
         val metadata = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, visitorData,
@@ -290,7 +290,7 @@ object PlayerFallback {
             .put("contentCheckOk", true)
             .put("racyCheckOk", true)
             .apply {
-                if (cfg.name == "WEB_EMBEDDED_PLAYER") {
+                if (cfg.name in setOf("WEB", "WEB_EMBEDDED_PLAYER")) {
                     poTokens?.playerRequestPoToken?.takeIf { it.isNotBlank() }?.let {
                         put("serviceIntegrityDimensions", JSONObject().put("poToken", it))
                     }
@@ -308,9 +308,10 @@ object PlayerFallback {
             .apply {
                 val cookies = Account.cookieHeader()
                 if (cookies.isNotBlank()) header("Cookie", cookies)
-                if (cfg.name == "WEB_EMBEDDED_PLAYER") {
+                if (cfg.name in setOf("WEB", "WEB_EMBEDDED_PLAYER")) {
                     header("Origin", "https://www.youtube.com")
-                    header("Referer", "https://www.youtube.com/embed/$videoId")
+                    header("Referer", if (cfg.name == "WEB_EMBEDDED_PLAYER")
+                        "https://www.youtube.com/embed/$videoId" else "https://www.youtube.com/watch?v=$videoId")
                 }
             }
             .build()

@@ -1,8 +1,6 @@
 package com.tensei.ytxtube
 
 import android.os.SystemClock
-import android.view.InputDevice
-import android.view.MotionEvent
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -35,16 +33,6 @@ class YouTubePlaybackValidationTest {
         main { view.evaluateJavascript(script) { answer = it; done.countDown() } }
         return if (done.await(5, TimeUnit.SECONDS)) answer else null
     }
-    private fun tap(x: Float, y: Float) {
-        val time = SystemClock.uptimeMillis()
-        for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
-            val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), action, x, y, 0)
-            event.source = InputDevice.SOURCE_TOUCHSCREEN
-            assertTrue("Input injection failed", instrumentation.uiAutomation.injectInputEvent(event, false))
-            event.recycle()
-        }
-    }
-
     @Test(timeout = 840_000) fun reportedVideosPlayContentBeyondTheOneMinuteBoundary() {
         val context = instrumentation.targetContext
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, "android.permission.POST_NOTIFICATIONS")
@@ -81,7 +69,8 @@ class YouTubePlaybackValidationTest {
                 var priorRoute = ""
                 var route = "native"
                 var webError = ""
-                var lastTap = 0L
+                var lastPlayRequest = 0L
+                var webPlayError = ""
                 var observedPosition = 0L
                 while (SystemClock.elapsedRealtime() < deadline && playedMs < 65_000) {
                     var playing = false
@@ -110,13 +99,9 @@ class YouTubePlaybackValidationTest {
                             observedPosition = (page.optDouble("t") * 1000).toLong()
                             playing = page.optBoolean("playing") && !page.optBoolean("ad")
                             webError = page.optString("error")
-                            if (!page.optBoolean("playing") && SystemClock.elapsedRealtime() - lastTap > 5000 && page.optDouble("x") > 0) {
-                                val location = IntArray(2)
-                                main { web.getLocationOnScreen(location) }
-                                val scale = page.optDouble("scale", 1.0).toFloat()
-                                tap(location[0] + page.optDouble("x").toFloat() * scale,
-                                    location[1] + page.optDouble("y").toFloat() * scale)
-                                lastTap = SystemClock.elapsedRealtime()
+                            if (!page.optBoolean("playing") && SystemClock.elapsedRealtime() - lastPlayRequest > 6000) {
+                                main { playWebVideo(web) { webPlayError = it.orEmpty() } }
+                                lastPlayRequest = SystemClock.elapsedRealtime()
                             }
                         }
                     }
@@ -131,7 +116,7 @@ class YouTubePlaybackValidationTest {
                 val result = JSONObject().put("video_id", id).put("passed", playedMs >= 65_000)
                     .put("android_api", android.os.Build.VERSION.SDK_INT).put("liquid_glass", false)
                     .put("content_played_ms", playedMs).put("route", route).put("position_ms", observedPosition)
-                    .put("web_error", webError)
+                    .put("web_error", webError).put("web_play_error", webPlayError)
                 main {
                     result.put("native_error", state!!.controller?.playerError?.errorCodeName.orEmpty())
                     result.put("app_error", state!!.error.orEmpty())
