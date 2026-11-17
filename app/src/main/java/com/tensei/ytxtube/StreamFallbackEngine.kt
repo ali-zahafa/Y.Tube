@@ -110,12 +110,12 @@ internal class StreamRecoverer(
                         VisitorDataProvider.invalidate()
                         kotlinx.coroutines.runBlocking { YTXTubeApplication.poTokenGenerator.invalidate() }
                         StreamCache.getOrLoad(id)
-                        StreamRecovery.reset(id)
+                        null
                     }
                     2 -> {
                         StreamCache.invalidate(id)
                         StreamCache.getOrLoad(id)
-                        StreamRecovery.setRoute(id, StreamRecovery.Route.DirectProgressive)
+                        StreamRecovery.Route.DirectProgressive
                     }
                     else -> {
                         evictFailedCache(id)
@@ -127,19 +127,19 @@ internal class StreamRecoverer(
                         val direct = checkNotNull(PlayerFallback.directStreams(id)) {
                             "Fallback player response contained no supported direct URLs"
                         }
-                        StreamRecovery.setRoute(
-                            id,
-                            if (direct.hlsUrl != null && direct.videoUrl == null && direct.muxedUrl == null)
-                                StreamRecovery.Route.Hls
-                            else StreamRecovery.Route.DirectProgressive,
-                        )
+                        if (direct.hlsUrl != null && direct.videoUrl == null && direct.muxedUrl == null)
+                            StreamRecovery.Route.Hls
+                        else StreamRecovery.Route.DirectProgressive
                     }
                 }
             }
             main.post {
                 // Ignore stale callbacks without clearing a newer video's recovery state.
                 if (!generation.isCurrent(token) || player.currentMediaItem?.mediaId != id) return@post
-                result.onSuccess {
+                result.mapCatching { route ->
+                    if (route == null) StreamRecovery.reset(id) else StreamRecovery.setRoute(id, route)
+                    // MediaSource creation can also fail synchronously; keep it inside
+                    // the same bounded recovery sequence instead of crashing main.
                     resume(item, position, shouldPlay)
                 }.onFailure { failure ->
                     Log.w(TAG, "Recovery stage $stage failed for $id", failure)
