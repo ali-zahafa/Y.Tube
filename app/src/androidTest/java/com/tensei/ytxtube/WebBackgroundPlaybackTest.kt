@@ -43,6 +43,7 @@ class WebBackgroundPlaybackTest {
     }
 
     @Test fun backgroundButtonKeepsMediaPlayingPastOneMinuteAndNotificationControlsWork() {
+        shell("pm grant ${instrumentation.targetContext.packageName} android.permission.POST_NOTIFICATIONS")
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         lateinit var view: WebView
         val loaded = CountDownLatch(1)

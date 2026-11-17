@@ -9,12 +9,14 @@ import android.os.*
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /** The same WebView stays alive when its Compose dialog goes away. All access is on main. */
 internal object WebPlaybackSession {
     var view: WebView? = null
     var videoId: String? = null
-    var background = false
+    var background by androidx.compose.runtime.mutableStateOf(false)
     var attached = false
     var service: WebPlaybackService? = null
 
@@ -24,6 +26,7 @@ internal object WebPlaybackSession {
         service = null
         oldService?.stopSelf()
         view?.let {
+            it.settings.mediaPlaybackRequiresUserGesture = true
             it.evaluateJavascript("window.__ytubeBackground = false; document.querySelectorAll('video').forEach(v => v.pause());", null)
             if (!attached) destroy()
         }

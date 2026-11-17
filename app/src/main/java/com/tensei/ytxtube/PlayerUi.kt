@@ -2006,6 +2006,13 @@ private fun VideoDetailsBlock(
     isLiveStream: Boolean,
 ) {
     Column(Modifier.padding(horizontal = 20.dp)) {
+        if (WebPlaybackSession.background && WebPlaybackSession.videoId == item.id) {
+            Text("Web player in background", color = c.primary, modifier = Modifier.padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.TextButton(onClick = { state.switchWebPlayer(true) }) { Text("Return to web player") }
+                androidx.compose.material3.TextButton(onClick = { WebPlaybackSession.stop() }) { Text("Stop") }
+            }
+        }
         Spacer(Modifier.height(18.dp))
         Text(
             item.title,

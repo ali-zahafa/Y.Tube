@@ -257,6 +257,8 @@ internal fun startWebBackground(
         } else if (WebPlaybackSession.view !== view) {
             onError("This web player has already closed. Open it and try again.")
         } else {
+            // The user's background button gesture authorizes later notification Play.
+            view.settings.mediaPlaybackRequiresUserGesture = false
             view.evaluateJavascript(BACKGROUND_MODE_SCRIPT, null)
             WebPlaybackSession.background = true
             runCatching {
@@ -264,6 +266,7 @@ internal fun startWebBackground(
                     android.content.Intent(context, WebPlaybackService::class.java))
             }.onSuccess { onStarted() }.onFailure {
                 WebPlaybackSession.background = false
+                view.settings.mediaPlaybackRequiresUserGesture = true
                 view.evaluateJavascript("window.__ytubeBackground = false;", null)
                 onError("Could not start background playback. Keep the player open and try again.")
             }
