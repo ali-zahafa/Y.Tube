@@ -1372,16 +1372,21 @@ class PlayerState(private val scope: CoroutineScope) {
                 .firstOrNull()?.responseCode
             Log.w(TAG, "playback error ${e.errorCodeName}${status?.let { " (HTTP $it)" } ?: ""} for ${current?.id}", e)
 
-            if (status == 403 || status == 410) {
-                // StreamRecoverer handles retries and the final web fallback.
-                // Avoid showing a premature error while recovery is in progress.
-                if (StreamRecovery.recovering == current?.id) return
+            // StreamRecoverer owns the retry sequence. Do not surface the first error
+            // while its client/cache recovery stages are still running.
+            if (StreamRecovery.recovering == current?.id) return
+
+            val recoverableSourceFailure =
+                status in setOf(400, 403, 404, 410) ||
+                    e.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+                    e.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+            if (recoverableSourceFailure) {
                 errorFromPlayback = true
-                error = "Direct stream unavailable (HTTP $status). Opening YouTube web player."
+                error = "Direct stream unavailable${status?.let { " (HTTP $it)" }.orEmpty()}. Opening YouTube web player."
                 if (!webPlayerEnabled) switchWebPlayer(true)
                 return
             }
-            if (e.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && StreamRecovery.recovering == current?.id) return
+
             errorFromPlayback = true
             error = when (e.errorCode) {
                 PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
