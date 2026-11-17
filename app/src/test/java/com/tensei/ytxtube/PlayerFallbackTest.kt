@@ -15,8 +15,8 @@ class PlayerFallbackTest {
 
     @Test
     fun okWithSupportedStreamsKeepsOriginalResponse() {
-        assertFalse(PlayerFallback.isBlocked(ok("""{"formats":[{"itag":18}]}""")))
-        assertFalse(PlayerFallback.isBlocked(ok("""{"adaptiveFormats":[{"itag":140}]}""")))
+        assertFalse(PlayerFallback.isBlocked(ok("""{"formats":[{"itag":18,"url":"https://example.test/video"}]}""")))
+        assertFalse(PlayerFallback.isBlocked(ok("""{"adaptiveFormats":[{"itag":140,"url":"https://example.test/audio"}]}""")))
         assertFalse(PlayerFallback.isBlocked(ok("""{"hlsManifestUrl":"https://example.test/live.m3u8"}""")))
         assertFalse(PlayerFallback.isBlocked(ok("""{"dashManifestUrl":"https://example.test/live.mpd"}""")))
     }
@@ -24,7 +24,13 @@ class PlayerFallbackTest {
     @Test
     fun wrappedShortsResponseUsesSameClassification() {
         assertTrue(PlayerFallback.isBlocked("""{"playerResponse":${ok("{}")}}"""))
-        assertFalse(PlayerFallback.isBlocked("""{"playerResponse":${ok("""{"formats":[{"itag":18}]}""")}}"""))
+        assertFalse(PlayerFallback.isBlocked("""{"playerResponse":${ok("""{"formats":[{"itag":18,"url":"https://example.test/video"}]}""")}}"""))
+    }
+
+    @Test
+    fun cipherOnlyFormatsAreNotPlayable() {
+        assertTrue(PlayerFallback.isBlocked(ok("""{"formats":[{"itag":18,"signatureCipher":"s=abc"}]}""")))
+        assertTrue(PlayerFallback.isBlocked(ok("""{"adaptiveFormats":[{"itag":140,"url":""}]}""")))
     }
 
     @Test

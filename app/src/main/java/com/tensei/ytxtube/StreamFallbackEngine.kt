@@ -49,7 +49,7 @@ internal class StreamRecoverer(
     }
 
     override fun onPlayerError(error: PlaybackException) {
-        val status = httpStatus(error) ?: return
+        val status = httpStatus(error) ?: -1
         if (status !in setOf(400, 403, 404, 410) &&
             error.errorCode != PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED &&
             error.errorCode != PlaybackException.ERROR_CODE_IO_UNSPECIFIED) return
@@ -122,6 +122,7 @@ internal class StreamRecoverer(
                 }.onFailure { failure ->
                     Log.w(TAG, "Recovery stage $stage failed for $id", failure)
                     if (stage < MAX_ATTEMPTS) {
+                        attempt = stage + 1
                         runStage(item, id, position, shouldPlay, httpStatus(failure) ?: status, stage + 1)
                     } else {
                         activeRecovery = false

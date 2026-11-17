@@ -1,6 +1,7 @@
 package com.tensei.ytxtube.potoken
 
 import android.util.Log
+import android.os.Looper
 import android.webkit.CookieManager
 import com.tensei.ytxtube.VisitorDataProvider
 import com.tensei.ytxtube.YTXTubeApplication
@@ -73,6 +74,13 @@ class PoTokenGenerator {
     }
 
     fun getWebClientPoToken(videoId: String, sessionId: String): PoTokenResult? {
+        // The generator marshals WebView work to Main. Blocking Main here deadlocks it.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Log.w(tag, "PoToken requested on Main; scheduling warmup instead of blocking")
+            initialize()
+            lastStatus = PoTokenStatus.NOT_REQUESTED
+            return null
+        }
         if (sessionId.isBlank()) {
             lastStatus = PoTokenStatus.NO_VISITOR_DATA
             return null
