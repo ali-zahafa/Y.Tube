@@ -457,14 +457,17 @@ object StreamCache {
     private val entries = ConcurrentHashMap<String, Entry>()
     private val inflight = ConcurrentHashMap<String, FutureTask<StreamInfo>>()
     private val prefetcher = Executors.newFixedThreadPool(4)
+    private val generations = StreamCacheGeneration()
 
     fun invalidate(id: String) {
+        generations.invalidate(id)
         entries.remove(id)
         PlayerFallback.invalidate(id)
         inflight.remove(id)?.cancel(false)
     }
 
     fun invalidateAll() {
+        generations.invalidateAll()
         entries.clear()
         inflight.values.forEach { it.cancel(false) }
         inflight.clear()
@@ -476,6 +479,9 @@ object StreamCache {
 
     fun getOrLoad(id: String, forceClientFallback: Boolean = false, fallbackClientIndex: Int = 0): StreamInfo {
         if (!forceClientFallback) get(id)?.let { return it }
+        // A generation token prevents a slow, invalidated extraction from repopulating
+        // the cache with a URL that was already rejected by the player.
+        val token = generations.snapshot(id)
 
         if (forceClientFallback) {
             entries.remove(id)
@@ -500,7 +506,15 @@ object StreamCache {
                 }
             }
 
-            entries[id] = Entry(info, System.currentTimeMillis())
+            val published = generations.publishIfCurrent(id, token) {
+                entries[id] = Entry(info, System.currentTimeMillis())
+            }
+            if (!published) {
+                throw java.util.concurrent.CancellationException(
+                    "Stream extraction was invalidated before its result could be cached"
+                )
+            }
+
             val picked = StreamSelection.pick(info)
             Net.noteMediaHost((picked.video ?: picked.muxed)?.content)
             val metadata = PlayerFallback.metadata(id)
