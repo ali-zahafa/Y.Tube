@@ -1,4 +1,4 @@
-name: Publish Y.Tube 2.5.1 Debug APK to Releases
+name: Publish Y.Tube 2.5.2 Playback Recovery Preview APK
 
 on:
   workflow_dispatch:
@@ -14,42 +14,58 @@ permissions:
 jobs:
   publish-debug-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: v2.5.1-dual-sub-debug
-      VERIFIED_RUN: '43934532683'
-      VERIFIED_SHA: a6270c5a20afbe49c1d655445cff64c1bf09262c
+      RELEASE_TAG: v2.5.2-playback-recovery-preview
     steps:
-      - name: Download APK from successful Android CI run
+      - name: Wait for Android CI build of this exact commit
+        id: ci
         shell: bash
         run: |
           set -euo pipefail
-          run_status="$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN" --jq '.conclusion')"
-          run_sha="$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN" --jq '.head_sha')"
-          if [[ "$run_status" != "success" || "$run_sha" != "$VERIFIED_SHA" ]]; then
-            echo "Refusing to release unverified APK: status=$run_status sha=$run_sha" >&2
+          run_id=""
+          for attempt in $(seq 1 60); do
+            run_id="$(gh run list --repo "$GH_REPO" --workflow android-ci.yml --commit "$GITHUB_SHA" --json databaseId,conclusion,status --jq '[.[] | select(.conclusion == "success")][0].databaseId // empty')"
+            if [[ -n "$run_id" ]]; then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            failed="$(gh run list --repo "$GH_REPO" --workflow android-ci.yml --commit "$GITHUB_SHA" --json databaseId,conclusion,status --jq '[.[] | select(.conclusion == "failure")][0].databaseId // empty')"
+            if [[ -n "$failed" ]]; then
+              echo "Android CI failed for commit $GITHUB_SHA (run $failed); refusing to publish." >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Timed out waiting for Android CI success for $GITHUB_SHA" >&2
             exit 1
           fi
+
+      - name: Download APK built from this commit
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p dist
-          gh run download "$VERIFIED_RUN" --repo "$GH_REPO" --name YTXTube-debug-apk --dir dist
+          gh run download "${{ steps.ci.outputs.run_id }}" --repo "$GH_REPO" --name YTXTube-debug-apk --dir dist
           test -s dist/app-debug.apk
-          mv dist/app-debug.apk dist/Y.Tube-v2.5.1-dual-sub-debug.apk
-          sha256sum dist/Y.Tube-v2.5.1-dual-sub-debug.apk
+          mv dist/app-debug.apk dist/Y.Tube-v2.5.2-playback-recovery-preview.apk
+          sha256sum dist/Y.Tube-v2.5.2-playback-recovery-preview.apk
 
       - name: Create or update direct-download GitHub Release
         shell: bash
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/Y.Tube-v2.5.1-dual-sub-debug.apk --repo "$GH_REPO" --clobber
+            gh release upload "$RELEASE_TAG" dist/Y.Tube-v2.5.2-playback-recovery-preview.apk --repo "$GH_REPO" --clobber
           else
-            gh release create "$RELEASE_TAG" dist/Y.Tube-v2.5.1-dual-sub-debug.apk \
+            gh release create "$RELEASE_TAG" dist/Y.Tube-v2.5.2-playback-recovery-preview.apk \
               --repo "$GH_REPO" \
-              --target "$VERIFIED_SHA" \
-              --title "Y.Tube 2.5.1 - Dual Subtitles + Web Player (Debug)" \
-              --notes "Verified Android CI run #43934532683: unit tests and debug APK build passed. Includes optional YouTube WebView playback and unofficial Google Translate web subtitles. This is a **debug/preview APK**, package com.tensei.ytxtube.preview, signed with the Android debug key; it installs separately from the normal signed app. Playback and translation on physical devices are not yet verified; unofficial Google endpoints can throttle or stop responding." \
+              --target "$GITHUB_SHA" \
+              --title "Y.Tube 2.5.2 - Playback Recovery Preview" \
+              --notes "Built from commit $GITHUB_SHA after Android CI unit tests and debug APK build passed. This is a debug/preview APK signed with the Android debug key and uses package com.tensei.ytxtube.preview, so it installs separately from the regular app. This build contains the playback-recovery state/fallback changes. Made-for-Kids playback still requires real-device verification; a successful build does not prove every YouTube stream can play." \
               --prerelease \
               --latest=false
           fi
