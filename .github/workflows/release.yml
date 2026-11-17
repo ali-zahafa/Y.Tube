@@ -73,8 +73,10 @@ jobs:
           certificates="$("$tools/apksigner" verify --verbose --print-certs "$apk")" || { echo "::error::APK signature verification failed"; exit 1; }
           grep -qx 'Number of signers: 1' <<< "$certificates" || { echo "::error::Expected exactly one APK signer"; exit 1; }
 
-          apk_cert="$(sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' <<< "$certificates" | tr '[:upper:]' '[:lower:]')"
-          [[ "$apk_cert" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::Could not read APK signer SHA-256 fingerprint"; exit 1; }
+          echo "apksigner certificate report:"
+          printf '%s\n' "$certificates"
+          apk_cert="$(printf '%s\n' "$certificates" | awk 'tolower($0) ~ /signer #1 certificate sha-256 digest:/ { sub(/^.*digest:[[:space:]]*/, ""); gsub(/[^[:xdigit:]]/, ""); print tolower($0); exit }')"
+          [[ "$apk_cert" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::Could not parse APK signer SHA-256 fingerprint from apksigner report"; exit 1; }
 
           echo "Comparing APK certificate with the supplied JKS certificate"
           cert_file="$(mktemp "$RUNNER_TEMP/y-tube-cert.XXXXXX")"
