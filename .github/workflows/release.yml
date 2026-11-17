@@ -75,7 +75,7 @@ jobs:
 
           echo "apksigner certificate report:"
           printf '%s\n' "$certificates"
-          apk_cert="$(printf '%s\n' "$certificates" | grep -i 'sha-256' | sed -E 's/.*digest:[[:space:]]*//' | tr -cd '0123456789abcdefABCDEF' | tr '[:upper:]' '[:lower:]')"
+          apk_cert="$(printf '%s\n' "$certificates" | grep -i 'certificate SHA-256 digest:' | sed -E 's/.*certificate SHA-256 digest:[[:space:]]*//' | tr -cd '0123456789abcdefABCDEF' | tr '[:upper:]' '[:lower:]')"
           if [[ ! "$apk_cert" =~ ^[a-f0-9]{64}$ ]]; then
             echo "::error::Could not parse APK signer SHA-256 fingerprint; see apksigner certificate report above"
             exit 1
