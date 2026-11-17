@@ -586,7 +586,7 @@ fun VideoContent(
 
         val error = state.error
         if (error != null) {
-            ErrorPanel(error, onRetry = state::retry, onCollapse = onCollapse)
+            ErrorPanel(error, onRetry = state::retry, onCollapse = onCollapse, onWeb = if (state.current?.localUri == null) ({ state.switchWebPlayer(true) }) else null)
             return@Box
         }
 
@@ -937,7 +937,7 @@ fun AudioOnlyStage(
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = ramp(progress(), 0.25f, 0.85f) }.background(c.surfaceContainer))
         val error = state.error
         if (error != null) {
-            ErrorPanel(error, onRetry = state::retry, onCollapse = {})
+            ErrorPanel(error, onRetry = state::retry, onCollapse = {}, onWeb = if (state.current?.localUri == null) ({ state.switchWebPlayer(true) }) else null)
             return@Box
         }
         Column(
@@ -1418,7 +1418,7 @@ private fun PlayerSettingItem(
 }
 
 @Composable
-private fun BoxScope.ErrorPanel(message: String, onRetry: () -> Unit, onCollapse: () -> Unit) {
+private fun BoxScope.ErrorPanel(message: String, onRetry: () -> Unit, onCollapse: () -> Unit, onWeb: (() -> Unit)? = null) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)))
     Column(
         Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
@@ -1431,6 +1431,13 @@ private fun BoxScope.ErrorPanel(message: String, onRetry: () -> Unit, onCollapse
         Box(
             Modifier.pressable(onClick = onRetry).clip(CircleShape).background(Color.White).padding(horizontal = 18.dp, vertical = 9.dp),
         ) { Text("Try again", color = Color(0xFF141414), fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+        if (onWeb != null) {
+            Spacer(Modifier.height(8.dp))
+            Box(Modifier.pressable(onClick = onWeb).clip(CircleShape)
+                .background(Color.White).padding(horizontal = 18.dp, vertical = 9.dp)) {
+                Text("Open web player", color = Color(0xFF141414), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        }
     }
 }
 

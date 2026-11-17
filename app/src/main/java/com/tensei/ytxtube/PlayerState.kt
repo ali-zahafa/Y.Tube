@@ -395,8 +395,10 @@ class PlayerState(private val scope: CoroutineScope) {
                     comments.load(item.id)
                     known[item.id] = d.item
                     d.related.forEach { known[it.id] = it }
-                    if (!d.playable) error = "No playable stream was found for this video."
-                    else if (startPlayback) startPlayback(d.item)
+                    if (!d.playable) {
+                        error = "No direct stream was found. Opening YouTube web player."
+                        if (startPlayback) switchWebPlayer(true)
+                    } else if (startPlayback) startPlayback(d.item)
                     else publishUpNext(item.id)
 
                     scope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -410,6 +412,10 @@ class PlayerState(private val scope: CoroutineScope) {
                     if (!isActive || current?.id != item.id) return@launch
                     Log.w(TAG, "details failed for ${item.id}", it)
                     error = YouTube.friendlyError(it)
+                    if (startPlayback && item.localUri == null &&
+                        it !is java.io.IOException && it !is kotlinx.coroutines.CancellationException) {
+                        switchWebPlayer(true)
+                    }
 
                     comments.load(item.id)
                 }
@@ -845,6 +851,8 @@ class PlayerState(private val scope: CoroutineScope) {
     }
     fun hideWebPlayerForBackground() {
         controller?.pause()
+        fullscreen = false
+        portraitFullscreen = false
         webPlayerEnabled = false
     }
     var dualCaptionsEnabled by mutableStateOf(false)

@@ -198,14 +198,6 @@ fun PlayerScreen(
 ) {
     val c = MaterialTheme.colorScheme
     val item = state.current ?: return
-    if (state.webPlayerEnabled) {
-        YouTubeWebPlayerDialog(
-            videoId = item.id,
-            startPositionMs = state.positionMs,
-            onBackground = { state.hideWebPlayerForBackground() },
-            onClose = { state.switchWebPlayer(false) },
-        )
-    }
     val isLiveStream = state.details?.item?.isLive == true || item.isLive
     LaunchedEffect(state.sheet, item.id, isLiveStream) {
         if (state.sheet == PlayerSheet.Comments && isLiveStream) {
