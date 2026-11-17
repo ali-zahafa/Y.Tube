@@ -873,7 +873,9 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
     override fun setLoadErrorHandlingPolicy(policy: LoadErrorHandlingPolicy): MediaSource.Factory = apply {
         val recoveryAwarePolicy = object : LoadErrorHandlingPolicy by policy {
             override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-                val status = (info.exception as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                val status = generateSequence(info.exception as Throwable?) { it.cause }
+                    .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+                    .firstOrNull()?.responseCode
                 return if (status == 403 || status == 410) C.TIME_UNSET
                 else policy.getRetryDelayMsFor(info)
             }
@@ -912,7 +914,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
 
         if (picked.video == null && picked.muxed == null && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: no progressive streams, falling back to HLS")
-            return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
+            return hlsFactory().createMediaSource(
                 MediaItem.Builder()
                     .setUri(hlsUrl)
                     .setMediaId(mediaItem.mediaId)
