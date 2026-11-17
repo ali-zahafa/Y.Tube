@@ -54,6 +54,13 @@ class YouTubePlaybackValidationTest {
         var state: PlayerState? = null
         var activity: MainActivity? = null
         scenario.onActivity { activity = it }
+        var glassEnabled = true
+        main {
+            glassEnabled = GlassSettings.enabled
+            // Use the app's existing low-effects setting on the software-rendered emulator.
+            // This changes neither extraction nor media playback code or results.
+            GlassSettings.updateEnabled(false)
+        }
         try {
             val connectUntil = SystemClock.elapsedRealtime() + 30_000
             while (state?.controller == null && SystemClock.elapsedRealtime() < connectUntil) {
@@ -122,6 +129,7 @@ class YouTubePlaybackValidationTest {
                     Thread.sleep(1000)
                 }
                 val result = JSONObject().put("video_id", id).put("passed", playedMs >= 65_000)
+                    .put("android_api", android.os.Build.VERSION.SDK_INT).put("liquid_glass", false)
                     .put("content_played_ms", playedMs).put("route", route).put("position_ms", observedPosition)
                     .put("web_error", webError)
                 main {
@@ -138,7 +146,7 @@ class YouTubePlaybackValidationTest {
             assertTrue("One or more real YouTube videos failed; see youtube-validation.json. No verified APK may be published.",
                 (0 until results.length()).all { results.getJSONObject(it).getBoolean("passed") })
         } finally {
-            val responsive = runCatching { main { state?.close(); activity?.finish() } }.isSuccess
+            val responsive = runCatching { main { state?.close(); activity?.finish(); GlassSettings.updateEnabled(glassEnabled) } }.isSuccess
             if (responsive) scenario.close()
         }
     }

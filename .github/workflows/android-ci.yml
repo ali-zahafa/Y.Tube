@@ -74,7 +74,7 @@ jobs:
       - name: Validate actual YouTube videos and background controls
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
           target: google_apis
           ram-size: 2048M
