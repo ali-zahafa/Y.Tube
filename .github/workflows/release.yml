@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish this verified tag and APK to GitHub Releases
+        description: Publish the verified APK to GitHub Releases (tag only)
         type: boolean
+        required: true
         default: false
 
 permissions:
@@ -18,20 +19,27 @@ jobs:
       - name: Require a tag when publishing
         if: inputs.publish
         run: test "$GITHUB_REF_TYPE" = tag
+
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+
       - uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: '14742923'
           packages: 'platform-tools'
+
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'build-tools;37.0.0'
+
       - uses: gradle/actions/setup-gradle@v4
+
       - name: Run unit tests
-        run: ./gradlew :app:testDebugUnitTest
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
+
       - name: Build and verify signed APK
         shell: bash
         env:
@@ -41,89 +49,47 @@ jobs:
           KEY_PASSWORD: ${{ secrets.YTUBE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${ANDROID_KEYSTORE_BASE64:?Missing release keystore secret}"
-          : "${KEYSTORE_PASSWORD:?Missing keystore password secret}"
-          : "${KEY_ALIAS:?Missing key alias secret}"
-          : "${KEY_PASSWORD:?Missing key password secret}"
+          : "${ANDROID_KEYSTORE_BASE64:?Missing YTUBE_KEYSTORE_BASE64 secret}"
+          : "${KEYSTORE_PASSWORD:?Missing YTUBE_KEYSTORE_PASSWORD secret}"
+          : "${KEY_ALIAS:?Missing YTUBE_KEY_ALIAS secret}"
+          : "${KEY_PASSWORD:?Missing YTUBE_KEY_PASSWORD secret}"
+
           umask 077
           export ANDROID_RELEASE_KEYSTORE="$(mktemp "$RUNNER_TEMP/y-tube-release.XXXXXX")"
           trap 'rm -f "$ANDROID_RELEASE_KEYSTORE"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_RELEASE_KEYSTORE"
           unset ANDROID_KEYSTORE_BASE64
+
           ./gradlew --no-daemon :app:assembleRelease
           unset KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
+
           apk=app/build/outputs/apk/release/app-release.apk
           tools="$ANDROID_HOME/build-tools/37.0.0"
           "$tools/zipalign" -c -P 16 4 "$apk"
+
           certificates="$("$tools/apksigner" verify --verbose --print-certs "$apk")"
-          grep -Eq '^Signer #1 certificate SHA-256 digest: [0-9a-f]{64}
-          manifest="$("$tools/aapt" dump badging "$apk")"
-          if grep -q '^application-debuggable' <<< "$manifest"; then exit 1; fi
-          badging="$(sed -n '1p' <<< "$manifest")"
-          version="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
-          code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<< "$badging")"
-          [[ "$badging" == "package: name='com.tensei.ytxtube'"* ]]
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then [[ "$GITHUB_REF_NAME" == "v$version" ]]; fi
-          mkdir -p release
-          cp "$apk" "release/Y.Tube-v$version.apk"
-          printf '%s\n' "$badging" "$certificates" > release/verification.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Y.Tube-release
-          path: release/
-          if-no-files-found: error
-
-  publish:
-    if: inputs.publish && github.ref_type == 'tag'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: Y.Tube-release
-          path: release
-      - name: Publish verified APK
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version="$(grep -m1 'versionName = ' app/build.gradle.kts | cut -d '"' -f2)"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          tag="v$version"
-          apk="Y.Tube-$tag.apk"
-          notes="docs/releases/$tag.md"
-          release_notes=(--generate-notes)
-          if [[ -f "$notes" ]]; then release_notes=(--notes-file "$notes"); fi
-
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" "release/$apk" --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$tag" "release/$apk" \
-              --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
-              --title "Y.Tube $version" "${release_notes[@]}"
-          fi
-
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$apk" --dir downloaded
-          cmp "release/$apk" "downloaded/$apk"
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url,isDraft,assets
- <<< "$certificates"
           grep -qx 'Number of signers: 1' <<< "$certificates"
+
+          apk_cert="$(sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$/\1/p' <<< "$certificates" | tr '[:upper:]' '[:lower:]')"
+          [[ "$apk_cert" =~ ^[a-f0-9]{64}$ ]]
+
+          keystore_cert="$("$JAVA_HOME/bin/keytool" -list -v -keystore "$ANDROID_RELEASE_KEYSTORE" -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" 2>/dev/null | sed -nE 's/^[[:space:]]*SHA256: ([0-9A-Fa-f:]{95})$/\1/p' | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          [[ "$keystore_cert" =~ ^[a-f0-9]{64}$ && "$apk_cert" == "$keystore_cert" ]]
+
           manifest="$("$tools/aapt" dump badging "$apk")"
-          if grep -q '^application-debuggable' <<< "$manifest"; then exit 1; fi
+          ! grep -q '^application-debuggable' <<< "$manifest"
           badging="$(sed -n '1p' <<< "$manifest")"
           version="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
-          code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<< "$badging")"
           [[ "$badging" == "package: name='com.tensei.ytxtube'"* ]]
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then [[ "$GITHUB_REF_NAME" == "v$version" ]]; fi
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          fi
+
           mkdir -p release
           cp "$apk" "release/Y.Tube-v$version.apk"
-          printf '%s\n' "$badging" "$certificates" > release/verification.txt
+          printf '%s\n' "$badging" "$certificates" "Verified signing certificate matches supplied release keystore." > release/verification.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: Y.Tube-release
@@ -138,22 +104,25 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: Y.Tube-release
           path: release
+
       - name: Publish verified APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(grep -m1 'versionName = ' app/build.gradle.kts | cut -d '"' -f2)"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           tag="v$version"
           apk="Y.Tube-$tag.apk"
           notes="docs/releases/$tag.md"
           release_notes=(--generate-notes)
-          if [[ -f "$notes" ]]; then release_notes=(--notes-file "$notes"); fi
+          if [[ -f "$notes" ]]; then
+            release_notes=(--notes-file "$notes")
+          fi
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "release/$apk" --repo "$GITHUB_REPOSITORY" --clobber
@@ -165,5 +134,5 @@ jobs:
 
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$apk" --dir downloaded
           cmp "release/$apk" "downloaded/$apk"
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release edit "$tag" --draft=false
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url,isDraft,assets
