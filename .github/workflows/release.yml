@@ -61,7 +61,6 @@ jobs:
           unset ANDROID_KEYSTORE_BASE64
 
           ./gradlew --no-daemon :app:assembleRelease
-          unset KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
 
           apk=app/build/outputs/apk/release/app-release.apk
           tools="$ANDROID_HOME/build-tools/37.0.0"
@@ -75,6 +74,7 @@ jobs:
 
           keystore_cert="$("$JAVA_HOME/bin/keytool" -list -v -keystore "$ANDROID_RELEASE_KEYSTORE" -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" 2>/dev/null | sed -nE 's/^[[:space:]]*SHA256: ([0-9A-Fa-f:]{95})$/\1/p' | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           [[ "$keystore_cert" =~ ^[a-f0-9]{64}$ && "$apk_cert" == "$keystore_cert" ]]
+          unset KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
 
           manifest="$("$tools/aapt" dump badging "$apk")"
           ! grep -q '^application-debuggable' <<< "$manifest"
