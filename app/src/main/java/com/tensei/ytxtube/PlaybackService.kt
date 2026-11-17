@@ -865,6 +865,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     } ?: dataSourceFactory
     private val fallback = DefaultMediaSourceFactory(dataSourceFactory)
+    private var recoveryPolicy: LoadErrorHandlingPolicy? = null
 
     override fun setDrmSessionManagerProvider(provider: DrmSessionManagerProvider): MediaSource.Factory =
         apply { fallback.setDrmSessionManagerProvider(provider) }
@@ -877,6 +878,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
                 else policy.getRetryDelayMsFor(info)
             }
         }
+        recoveryPolicy = recoveryAwarePolicy
         fallback.setLoadErrorHandlingPolicy(recoveryAwarePolicy)
     }
 
@@ -895,7 +897,7 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         val route = StreamRecovery.routeFor(mediaItem.mediaId)
         if ((isLive || route == StreamRecovery.Route.Hls) && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing HLS")
-            return HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
+            return hlsFactory().createMediaSource(
                 MediaItem.Builder()
                     .setUri(hlsUrl)
                     .setMediaId(mediaItem.mediaId)
@@ -942,9 +944,15 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         }
     }
 
+    private fun hlsFactory(): HlsMediaSource.Factory =
+        HlsMediaSource.Factory(dataSourceFactory).also { factory ->
+            recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy)
+        }
+
     private fun source(stream: Stream, durationSec: Long, mediaItem: MediaItem): MediaSource {
         val factory = if (durationSec > 0) onDemandDataSourceFactory else dataSourceFactory
         return ProgressiveMediaSource.Factory(factory)
+            .also { progressive -> recoveryPolicy?.let(progressive::setLoadErrorHandlingPolicy) }
             .createMediaSource(mediaItem.buildUpon().setUri(stream.content).build())
     }
 }
