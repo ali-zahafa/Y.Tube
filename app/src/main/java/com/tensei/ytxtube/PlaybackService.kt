@@ -788,6 +788,7 @@ internal object YouTubeStreamHttp {
     private const val UA_ANDROID_VR = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
     private const val UA_ANDROID = "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip"
     private const val UA_TV = "Mozilla/5.0(SMART-TV; Linux; Tizen 4.0.0.2) AppleWebkit/605.1.15 (KHTML, like Gecko) SamsungBrowser/9.2 TV Safari/605.1.15"
+    private const val UA_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     fun userAgentForUrl(url: String): String {
         Net.mediaUserAgent(url)?.let { return it }
@@ -806,6 +807,7 @@ internal object YouTubeStreamHttp {
                 "com.google.android.youtube/$it (Linux; U; Android 14) gzip"
             } ?: UA_ANDROID
             clientParam.contains("TVHTML5") -> UA_TV
+            clientParam.contains("WEB") -> UA_WEB
             else -> Net.USER_AGENT
         }
     }
@@ -821,28 +823,35 @@ internal object YouTubeStreamHttp {
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
-                        val clientName = Uri.parse(url).getQueryParameter("c")?.uppercase().orEmpty()
-                        val isWebClient = clientName == "WEB" || clientName == "MWEB" ||
-                            clientName == "WEB_EMBEDDED_PLAYER" || (clientName.isBlank() && ua == Net.USER_AGENT)
+                        
+                        val parsed = Uri.parse(url)
+                        val clientName = parsed.getQueryParameter("c")?.uppercase().orEmpty()
+                        val isWebClient = clientName.contains("WEB") || (clientName.isBlank() && ua == Net.USER_AGENT)
+                        
                         if (isWebClient) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
                             headers.putIfAbsent("Referer", "https://www.youtube.com/")
                         }
+                        
+                        VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }?.let {
+                            headers.putIfAbsent("X-Goog-Visitor-Id", it)
+                        }
+
                         val cookies = if (Account.signedIn) Account.cookieHeader() else ""
                         if (cookies.isNotBlank()) {
                             headers.keys.removeAll { it.equals("Cookie", ignoreCase = true) }
                             headers["Cookie"] = cookies
                         }
+                        
                         val updatedSpec = dataSpec.buildUpon()
                             .setHttpRequestHeaders(headers)
                             .build()
                         try {
                             return base.open(updatedSpec)
                         } catch (error: HttpDataSource.InvalidResponseCodeException) {
-                            val parsed = Uri.parse(url)
                             Log.e(
                                 "YTXTubeHTTP",
-                                "Media HTTP ${error.responseCode}; host=${parsed.host}; client=${parsed.getQueryParameter("c") ?: "mapped"}; cver=${parsed.getQueryParameter("cver") ?: "mapped"}; itag=${parsed.getQueryParameter("itag") ?: "?"}; range=${dataSpec.position}+${dataSpec.length}",
+                                "Media HTTP ${error.responseCode}; host=${parsed.host}; client=$clientName; cver=${parsed.getQueryParameter("cver") ?: "mapped"}; itag=${parsed.getQueryParameter("itag") ?: "?"}; range=${dataSpec.position}+${dataSpec.length}",
                             )
                             throw error
                         }
@@ -905,8 +914,6 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             if (!dash.isNullOrBlank()) {
                 return dashFactory().createMediaSource(mediaItem.buildUpon().setUri(dash).build())
             }
-            // Prefer the complete progressive stream when offered. A valid muxed
-            // URL should not be hidden by a failing adaptive video/audio pair.
             if (direct.muxedUrl != null) return directSource(direct.muxedUrl, mediaItem)
             if (direct.videoUrl != null && direct.audioUrl != null) {
                 return MergingMediaSource(
@@ -947,8 +954,6 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
             )
         }
 
-        // YouTube progressive URLs are complete media files, not stable DASH segment bases.
-        // Synthetic byte-range DASH manifests caused mid-stream HTTP 403 responses.
         val video = picked.video
         val audio = picked.audio
         return when {
