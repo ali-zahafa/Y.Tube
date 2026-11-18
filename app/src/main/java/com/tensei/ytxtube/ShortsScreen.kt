@@ -56,7 +56,6 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.FastForward
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material.icons.rounded.VolumeOff
@@ -107,6 +106,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.dash.manifest.DashManifestParser
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import org.schabi.newpipe.extractor.services.youtube.dashmanifestcreators.YoutubeProgressiveDashManifestCreator
 import org.schabi.newpipe.extractor.stream.Stream
 import java.io.ByteArrayInputStream
@@ -138,6 +138,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import kotlin.math.absoluteValue
+import kotlin.math.hypot
 
 
 @Stable
@@ -319,9 +320,6 @@ fun ShortsScreen(
         }
     }
 
-    // One shared preload manager and player: the next Short is prepared inside the
-    // manager, and the wrapped source is handed to the player so a swipe starts on
-    // samples that are already buffered instead of rebuilding the source.
     val preload = remember { ShortsPreloader(context) }
     val exo = preload.player
     val historyFeed by rememberUpdatedState(feed)
@@ -339,8 +337,6 @@ fun ShortsScreen(
     val pip = LocalPictureInPicture.current
     val inPip = pip?.active == true
 
-    // Shorts play in their own ExoPlayer with no wake handling, so the screen timed out after a
-    // minute as if nothing was playing. Keep it on exactly while a Short is playing.
     DisposableEffect(exo, view) {
         val keepAwake = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -417,8 +413,6 @@ fun ShortsScreen(
     var scrubPosition by remember { mutableLongStateOf(0L) }
 
     fun togglePlayback() {
-        // While the player is buffering, a tap should keep playback wanted
-        // instead of turning playWhenReady off and creating the old dead pause.
         if (exo.playWhenReady && exo.playbackState == Player.STATE_READY) {
             exo.pause()
         } else {
@@ -436,12 +430,8 @@ fun ShortsScreen(
         overlayWasPlaying = false
     }
 
-
     DisposableEffect(exo) {
         val listener = object : Player.Listener {
-            // The pause/play overlay follows playWhenReady, not isPlaying. While
-            // ExoPlayer is buffering isPlaying is false even though playback is
-            // wanted, which used to show a dead pause button that could not resume.
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 playing = playWhenReady
             }
@@ -464,8 +454,6 @@ fun ShortsScreen(
             }
 
             override fun onTracksChanged(tracks: Tracks) {
-                // The player now owns the period, so the preload manager can drop
-                // its reference without clearing the samples the player is using.
                 if (tracks.groups.isNotEmpty()) {
                     preload.releaseAdoptedIfCurrent(exo.currentMediaItem?.mediaId)
                 }
@@ -535,9 +523,6 @@ fun ShortsScreen(
         }
     }
 
-    // Resolve several Shorts ahead while this one plays and hand them to Media3's
-    // preload manager. It buffers the first seconds of each source in rank order;
-    // a swipe then adopts that wrapped source instead of rebuilding it.
     LaunchedEffect(feed.videos, page) {
         val upcoming = feed.videos.drop(page + 1).take(5)
         val keep = upcoming.mapTo(HashSet()) { it.id }
@@ -596,6 +581,7 @@ fun ShortsScreen(
             VerticalPager(
                 state = pager,
                 modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = !commentsOpen && !downloadOpen && !scrubbing,
                 beyondViewportPageCount = 1,
                 pageSpacing = 0.dp,
             ) { index ->
@@ -653,7 +639,6 @@ fun ShortsScreen(
                                             true
                                         }
                                         Key.DirectionRight -> {
-                                            // The rail is a child of this focused box; 2D search never enters it.
                                             runCatching { railFocus.requestFocus() }
                                             true
                                         }
@@ -665,84 +650,99 @@ fun ShortsScreen(
                         )
                         .background(Color.Black),
                 ) {
-                    // Everything the glass samples lives in this layer. The buttons are drawn
-                    // outside it so a backdrop can never contain the surface that samples it.
                     Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
-                    if (index == page && playError == null) {
-
-
-                        ShortsVideo(exo, Modifier.fillMaxSize())
-                    } else {
-                        AsyncImage(
-                            model = item.thumbnail ?: feedThumbnailUrl(item.id),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.25f)))
-                        if (index != page) {
-                            Icon(
-                                Icons.Rounded.PlayArrow,
+                        if (index == page && playError == null) {
+                            ShortsVideo(exo, Modifier.fillMaxSize())
+                        } else {
+                            AsyncImage(
+                                model = item.thumbnail ?: feedThumbnailUrl(item.id),
                                 contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(64.dp).align(Alignment.Center),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.25f)))
+                            if (index != page) {
+                                Icon(
+                                    Icons.Rounded.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(64.dp).align(Alignment.Center),
+                                )
+                            }
+                        }
+
+                        if (!inPip) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(220.dp)
+                                    .align(Alignment.BottomCenter)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f)),
+                                        ),
+                                    ),
+                            )
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(130.dp)
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent),
+                                        ),
+                                    ),
                             )
                         }
                     }
 
-
-                    if (!inPip) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(220.dp)
-                                .align(Alignment.BottomCenter)
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f)),
-                                    ),
-                                ),
-                        )
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(130.dp)
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent),
-                                    ),
-                                ),
-                        )
-                    }
-                    }
-
                     var is2xSpeed by remember { mutableStateOf(false) }
+                    // Non-consuming tap/hold detector: vertical drags always pass straight through to VerticalPager.
                     Box(
                         Modifier
                             .fillMaxSize()
                             .pointerInput(index == page) {
                                 if (index != page) return@pointerInput
-                                detectTapGestures(
-                                    onTap = { togglePlayback() },
-                                    onPress = {
-                                        var activated = false
-                                        val holdJob = scope.launch {
-                                            kotlinx.coroutines.delay(200)
-                                            activated = true
+                                val touchSlop = viewConfiguration.touchSlop
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var moved = false
+                                    var activated2x = false
+                                    val holdJob = scope.launch {
+                                        delay(260)
+                                        if (!moved) {
+                                            activated2x = true
                                             is2xSpeed = true
                                             exo.setPlaybackSpeed(2.0f)
                                         }
-                                        try {
-                                            tryAwaitRelease()
-                                        } finally {
-                                            holdJob.cancel()
-                                            if (activated) {
-                                                exo.setPlaybackSpeed(1.0f)
-                                                is2xSpeed = false
+                                    }
+                                    try {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) {
+                                                if (!moved && !activated2x && !change.isConsumed) {
+                                                    togglePlayback()
+                                                }
+                                                break
+                                            }
+                                            val dx = change.position.x - down.position.x
+                                            val dy = change.position.y - down.position.y
+                                            if (hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
+                                                moved = true
+                                                holdJob.cancel()
+                                                // Never consume drag changes so VerticalPager scrolls smoothly.
+                                                break
                                             }
                                         }
+                                    } finally {
+                                        holdJob.cancel()
+                                        if (activated2x) {
+                                            exo.setPlaybackSpeed(1.0f)
+                                            is2xSpeed = false
+                                        }
                                     }
-                                )
+                                }
                             },
                     )
 
@@ -812,6 +812,7 @@ fun ShortsScreen(
                                     playError = null
                                     scope.launch {
                                         val retryId = item.id
+                                        StreamCache.invalidate(retryId)
                                         val loaded = withContext(Dispatchers.IO) {
                                             runCatching { StreamCache.getOrLoad(retryId) }.getOrNull()
                                         }
@@ -966,7 +967,6 @@ fun ShortsScreen(
                                 }
                             },
                         )
-
 
                         if (duration > 0) {
                             val shownPosition = if (scrubbing) scrubPosition else position
@@ -1354,10 +1354,6 @@ private fun countLabel(value: Long, fallback: String = "Like"): String = when {
     else -> value.toString()
 }
 
-
-
-
-
 @Composable
 @OptIn(UnstableApi::class)
 private fun ShortsVideo(player: ExoPlayer, modifier: Modifier = Modifier) {
@@ -1385,12 +1381,9 @@ private fun ShortsVideo(player: ExoPlayer, modifier: Modifier = Modifier) {
         val videoHeight = if (ratio >= containerRatio) maxWidth / ratio else maxHeight
         AndroidView(
             factory = { context ->
-
-
-
                 TextureView(context).apply {
-
-
+                    isClickable = false
+                    isFocusable = false
                     runCatching { player.setVideoTextureView(this) }
                 }
             },
@@ -1401,12 +1394,6 @@ private fun ShortsVideo(player: ExoPlayer, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * Owns the Shorts player and Media3's preload manager. Both come from one builder so
- * they share the playback looper, renderer capabilities, bandwidth meter and load
- * control; that is what lets [PreloadMediaSource] hand a prepared period straight to
- * the player on a swipe.
- */
 @OptIn(UnstableApi::class)
 private class ShortsPreloader(context: Context) {
     private val loadControl = DefaultLoadControl.Builder()
@@ -1428,9 +1415,6 @@ private class ShortsPreloader(context: Context) {
     private val builder = DefaultPreloadManager.Builder(
         context,
         TargetPreloadStatusControl<Int, DefaultPreloadManager.PreloadStatus> { rank ->
-            // Rank is the absolute feed position; the manager orders by distance
-            // from the current page. The immediate next Short gets the deepest
-            // head start, the ones after it progressively less.
             val distance = (rank - currentIndex).coerceAtLeast(1)
             val targetMs = when (distance) {
                 1 -> 5_000L
@@ -1442,8 +1426,6 @@ private class ShortsPreloader(context: Context) {
     )
         .setLoadControl(loadControl)
         .setBandwidthMeter(PlaybackBandwidth.get())
-        // The preload manager hands its renderers factory to the player it builds, so decoder
-        // fallback (try the next decoder if the hardware one fails to start) is set here.
         .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
         .setDataSourceFactory(MediaCache.dataSourceFactory(context))
 
@@ -1452,8 +1434,6 @@ private class ShortsPreloader(context: Context) {
     val player: ExoPlayer = builder.buildExoPlayer(
         ExoPlayer.Builder(context)
             .setBandwidthMeter(PlaybackBandwidth.get())
-            // Shorts used to ignore audio focus entirely, so they kept talking over phone
-            // calls and played on top of the main player. Let Media3 manage focus here too.
             .setAudioAttributes(MediaAudio.attributes, true)
             .setHandleAudioBecomingNoisy(true),
     ).apply {
@@ -1478,10 +1458,6 @@ private class ShortsPreloader(context: Context) {
         })
     }
 
-    /**
-     * The preload manager keys its holders by the wrapped [PreloadMediaSource], not by
-     * the source handed to [DefaultPreloadManager.add], so always remove the wrapper.
-     */
     private fun removeInternal(id: String) {
         val prepared = wrapped.remove(id)
         val raw = owned.remove(id)
@@ -1506,7 +1482,6 @@ private class ShortsPreloader(context: Context) {
         }
     }
 
-    /** Returns the prepared wrapper for [id], or null when it was never offered. */
     fun take(id: String): MediaSource? {
         if (released) return null
         releaseAdopted()
@@ -1520,7 +1495,6 @@ private class ShortsPreloader(context: Context) {
         return source
     }
 
-    /** Called once the foreground player owns the period and its tracks are selected. */
     fun releaseAdoptedIfCurrent(mediaId: String?) {
         if (mediaId != null && mediaId == adoptedId) releaseAdopted()
     }
@@ -1533,7 +1507,6 @@ private class ShortsPreloader(context: Context) {
         if (source != null) runCatching { manager.remove(source) }
     }
 
-    /** Drops preloads for pages that are no longer close to the current one. */
     fun keepOnly(ids: Set<String>) {
         if (released) return
         (owned.keys + wrapped.keys).toSet()
@@ -1559,8 +1532,7 @@ private class ShortsPreloader(context: Context) {
 }
 
 @OptIn(UnstableApi::class)
-private fun createStreamSource(context: Context, stream: Stream, mediaId: String): MediaSource {
-    val url = stream.content
+private fun createStreamSource(context: Context, url: String, mediaId: String): MediaSource {
     val dsFactory = MediaCache.dataSourceFactory(context)
     val mediaItem = MediaItem.Builder()
         .setUri(url)
@@ -1568,6 +1540,10 @@ private fun createStreamSource(context: Context, stream: Stream, mediaId: String
         .build()
     return ProgressiveMediaSource.Factory(dsFactory).createMediaSource(mediaItem)
 }
+
+@OptIn(UnstableApi::class)
+private fun createStreamSource(context: Context, stream: Stream, mediaId: String): MediaSource =
+    createStreamSource(context, stream.content, mediaId)
 
 @OptIn(UnstableApi::class)
 private fun shortsSource(context: Context, info: StreamInfo, mediaId: String): MediaSource? {
@@ -1586,8 +1562,26 @@ private fun shortsSource(context: Context, info: StreamInfo, mediaId: String): M
         return MergingMediaSource(videoSource, audioSource)
     }
 
+    PlayerFallback.directStreams(mediaId)?.let { direct ->
+        val dsFactory = MediaCache.dataSourceFactory(context)
+        direct.hlsUrl?.let { hls ->
+            return HlsMediaSource.Factory(dsFactory)
+                .createMediaSource(MediaItem.Builder().setUri(hls).setMediaId(mediaId).build())
+        }
+        direct.dashManifestUrl?.let { dash ->
+            return DashMediaSource.Factory(dsFactory)
+                .createMediaSource(MediaItem.Builder().setUri(dash).setMediaId(mediaId).build())
+        }
+        direct.muxedUrl?.let { return createStreamSource(context, it, mediaId) }
+        if (direct.videoUrl != null && direct.audioUrl != null) {
+            return MergingMediaSource(
+                createStreamSource(context, direct.videoUrl, mediaId),
+                createStreamSource(context, direct.audioUrl, mediaId),
+            )
+        }
+    }
+
     val fallback = info.videoStreams.firstOrNull { it.isUrl }
         ?: info.videoOnlyStreams.firstOrNull { it.isUrl }
     return fallback?.let { createStreamSource(context, it, mediaId) }
 }
-
