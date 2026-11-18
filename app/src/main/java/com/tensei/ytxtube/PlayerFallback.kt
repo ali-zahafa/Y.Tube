@@ -2,6 +2,7 @@ package com.tensei.ytxtube
 
 import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -28,7 +29,17 @@ object PlayerFallback {
         val visitorData: String?,
         val poTokenPresent: Boolean,
     )
-    private class Cached(val at: Long, val answer: JSONObject, val source: SourceMetadata)
+    private class Cached(
+        val at: Long,
+        val answer: JSONObject,
+        val source: SourceMetadata,
+        val streamingDataPoToken: String?,
+    )
+    private data class FallbackResponse(
+        val answer: JSONObject,
+        val source: SourceMetadata,
+        val streamingDataPoToken: String?,
+    )
     private val cache = ConcurrentHashMap<String, Cached>()
     private val forcedClients = ConcurrentHashMap.newKeySet<String>()
     private val sourceMetadata = ConcurrentHashMap<String, SourceMetadata>()
@@ -57,19 +68,41 @@ object PlayerFallback {
                 .filter { it.optString("url").startsWith("https://") }
         }
         fun bitrate(item: JSONObject) = item.optLong("bitrate", 0L)
+        val pot = saved.streamingDataPoToken
         val muxed = urls("formats").maxByOrNull(::bitrate)?.optString("url")
+            ?.let { appendStreamingDataPoToken(it, pot) }
         val adaptive = urls("adaptiveFormats")
         val videos = adaptive.filter { it.optString("mimeType").startsWith("video/") }
         val audios = adaptive.filter { it.optString("mimeType").startsWith("audio/") }
         val video = videos.maxByOrNull(::bitrate)?.optString("url")
+            ?.let { appendStreamingDataPoToken(it, pot) }
         val audio = audios.maxByOrNull(::bitrate)?.optString("url")
-        val hls = streaming.optString("hlsManifestUrl").takeIf { it.startsWith("https://") }
-        val dash = streaming.optString("dashManifestUrl").takeIf { it.startsWith("https://") }
+            ?.let { appendStreamingDataPoToken(it, pot) }
+        val hls = streaming.optString("hlsManifestUrl")
+            .takeIf { it.startsWith("https://") }
+            ?.let { appendStreamingDataPoToken(it, pot) }
+        val dash = streaming.optString("dashManifestUrl")
+            .takeIf { it.startsWith("https://") }
+            ?.let { appendStreamingDataPoToken(it, pot) }
         if (muxed == null && video == null && hls == null && dash == null) return null
         listOfNotNull(muxed, video, audio, hls, dash).forEach {
             Net.registerMediaUserAgent(it, saved.source.userAgent)
         }
         return DirectStreams(video, audio, muxed, hls, dash)
+    }
+
+    /**
+     * YouTube may require the streaming-data poToken on media URLs even when the
+     * player request itself succeeded. Keep the URL unchanged when no token exists.
+     */
+    internal fun appendStreamingDataPoToken(url: String, token: String?): String {
+        val value = token?.takeIf { it.isNotBlank() } ?: return url
+        val parsed = url.toHttpUrlOrNull() ?: return url
+        return parsed.newBuilder()
+            .removeAllQueryParameters("pot")
+            .addQueryParameter("pot", value)
+            .build()
+            .toString()
     }
 
     fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
@@ -87,12 +120,16 @@ object PlayerFallback {
         val clients = fallbackClients()
         for (index in clientIndex.coerceIn(0, clients.lastIndex)..clients.lastIndex) {
             val cfg = clients[index]
-            val answer = runCatching { ask(videoId, cfg) }.getOrNull() ?: continue
-            if (!isPlayable(answer)) continue
-            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
+            val response = runCatching { ask(videoId, cfg) }.getOrNull() ?: continue
+            if (!isPlayable(response.answer)) continue
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
-                cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
-                sourceMetadata[videoId] = meta
+                cache[videoId] = Cached(
+                    System.currentTimeMillis(),
+                    response.answer,
+                    response.source,
+                    response.streamingDataPoToken,
+                )
+                sourceMetadata[videoId] = response.source
                 forcedClients.add(videoId)
             }
             if (published) return true
@@ -140,16 +177,20 @@ object PlayerFallback {
     private fun fetchFallback(videoId: String): JSONObject? {
         val token = cacheGenerations.snapshot(videoId)
         for (cfg in fallbackClients()) {
-            val answer = runCatching { ask(videoId, cfg) }
+            val response = runCatching { ask(videoId, cfg) }
                 .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
                 .getOrNull() ?: continue
-            if (!isPlayable(answer)) continue
-            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
+            if (!isPlayable(response.answer)) continue
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
-                cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
-                sourceMetadata[videoId] = meta
+                cache[videoId] = Cached(
+                    System.currentTimeMillis(),
+                    response.answer,
+                    response.source,
+                    response.streamingDataPoToken,
+                )
+                sourceMetadata[videoId] = response.source
             }
-            if (published) return answer
+            if (published) return response.answer
             return null
         }
         return null
@@ -241,7 +282,7 @@ object PlayerFallback {
             ("a bot" in lower || "not a bot" in lower || "confirm you" in lower || "error" in lower)
     }
 
-    private fun ask(videoId: String, cfg: ClientConfig): JSONObject {
+    private fun ask(videoId: String, cfg: ClientConfig): FallbackResponse {
         val client = JSONObject()
             .put("clientName", cfg.name)
             .put("clientVersion", cfg.version)
@@ -255,11 +296,11 @@ object PlayerFallback {
             .put("gl", "US")
         val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
         visitorData?.let { client.put("visitorData", it) }
-        val poToken = if (cfg.name == "WEB_EMBEDDED_PLAYER" && visitorData != null) {
-            YTXTubeApplication.poTokenGenerator
-                .getWebClientPoToken(videoId, visitorData)
-                ?.playerRequestPoToken
+        val poTokens = if (cfg.name == "WEB_EMBEDDED_PLAYER" && visitorData != null) {
+            YTXTubeApplication.poTokenGenerator.getWebClientPoToken(videoId, visitorData)
         } else null
+        val playerRequestPoToken = poTokens?.playerRequestPoToken
+        val streamingDataPoToken = poTokens?.streamingDataPoToken
 
         val body = JSONObject()
             .put("context", JSONObject().put("client", client))
@@ -269,8 +310,8 @@ object PlayerFallback {
             .apply {
                 if (cfg.name == "WEB_EMBEDDED_PLAYER") {
                     put("thirdPartyEmbedUrl", "https://www.youtube.com/embed/$videoId")
-                    if (!poToken.isNullOrBlank()) {
-                        put("serviceIntegrityDimensions", JSONObject().put("poToken", poToken))
+                    if (!playerRequestPoToken.isNullOrBlank()) {
+                        put("serviceIntegrityDimensions", JSONObject().put("poToken", playerRequestPoToken))
                     }
                 }
             }
@@ -308,7 +349,15 @@ object PlayerFallback {
                 } else {
                     failureReasons.remove(videoId)
                 }
-                answer
+                val metadata = SourceMetadata(
+                    clientName = cfg.name,
+                    clientVersion = cfg.version,
+                    userAgent = cfg.userAgent,
+                    visitorData = visitorData,
+                    poTokenPresent = !playerRequestPoToken.isNullOrBlank() ||
+                        !streamingDataPoToken.isNullOrBlank(),
+                )
+                FallbackResponse(answer, metadata, streamingDataPoToken)
             }
         } catch (error: Throwable) {
             if (failureReasons[videoId].isNullOrBlank()) {
