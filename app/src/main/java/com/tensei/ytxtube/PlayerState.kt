@@ -2,7 +2,6 @@ package com.tensei.ytxtube
 
 import android.content.ContentResolver
 import android.net.Uri
-
 import android.content.ComponentName
 import android.util.Log
 import androidx.annotation.OptIn
@@ -41,16 +40,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-
-
-
-
 @Stable
 @OptIn(UnstableApi::class)
 class PlayerState(private val scope: CoroutineScope) {
     var controller by mutableStateOf<MediaController?>(null)
         internal set
-
 
     var current by mutableStateOf<VideoItem?>(null)
         private set
@@ -147,15 +141,12 @@ class PlayerState(private val scope: CoroutineScope) {
         internal set
 
     init {
-
         scope.launch {
             snapshotFlow { StreamRecovery.recovering to StreamRecovery.failed }.collect { (_, failed) ->
                 syncFromPlayer()
                 if (failed != null && failed.first == current?.id) {
                     error = failed.second
                     isBuffering = false
-                    // Direct stream recovery is exhausted. Use the website player
-                    // instead of leaving the user on a permanent HTTP 403 screen.
                     if (!webPlayerEnabled) switchWebPlayer(true)
                 }
             }
@@ -166,20 +157,11 @@ class PlayerState(private val scope: CoroutineScope) {
 
     private var aspectFromFrames = false
 
-    
-
-
-
-    /**
-     * Video id for which "Play in background" is on (audio only, keeps playing when the app is
-     * left). Session-only: never saved, and dropped when another video is opened.
-     */
     var backgroundAudioFor by mutableStateOf<String?>(null)
         private set
 
     val backgroundAudioActive: Boolean get() = backgroundAudioFor != null && backgroundAudioFor == current?.id
 
-    /** Audio-only presentation: the saved Audio only mode or "Play in background" for this video. */
     val audioOnlyActive: Boolean get() = AudioOnly.enabled || backgroundAudioActive
 
     val stageAspect: Float get() = if (audioOnlyActive) AudioStageAspect else {
@@ -191,7 +173,6 @@ class PlayerState(private val scope: CoroutineScope) {
     var playingFormat by mutableStateOf<String?>(null)
         private set
 
-    /** Audio format actually being decoded, e.g. "AAC · 129 kbps"; null until tracks are known. */
     var playingAudioFormat by mutableStateOf<String?>(null)
         private set
 
@@ -202,7 +183,6 @@ class PlayerState(private val scope: CoroutineScope) {
 
     var fullscreen by mutableStateOf(false)
 
-    /** Portrait videos go edge-to-edge without rotating the device, exactly like YouTube. */
     var portraitFullscreen by mutableStateOf(false)
 
     val portraitVideo get() = videoAspect < 1.02f
@@ -213,10 +193,7 @@ class PlayerState(private val scope: CoroutineScope) {
 
     val comments = CommentsState(scope)
 
-    /** Polled only while a live stream's chat sheet is open. */
     val liveChat = LiveChatState(scope)
-
-
 
     var accountState by mutableStateOf<VideoAccountState?>(null)
         private set
@@ -224,17 +201,15 @@ class PlayerState(private val scope: CoroutineScope) {
     var inWatchLater by mutableStateOf(false)
         private set
 
-    /** Audio tracks offered by the current video, Original first. */
     var audioOptions by mutableStateOf<List<AudioTrackOption>>(emptyList())
         private set
 
-    /** The cue text Media3's text renderer is currently showing, or null when captions are off. */
     var captionText by mutableStateOf<String?>(null)
         private set
 
-    private var likeOverrides by mutableStateOf<Map<String, LikeStatus>>(emptyMap())
-    private var likeDeltas by mutableStateOf<Map<String, Long>>(emptyMap())
-    private var dislikeDeltas by mutableStateOf<Map<String, Long>>(emptyMap())
+    private var likeOverrides by mutableStateOf>(emptyMap())
+    private var likeDeltas by mutableStateOf>(emptyMap())
+    private var dislikeDeltas by mutableStateOf>(emptyMap())
 
     val currentLike: LikeStatus
         get() = current?.id?.let { likeOverrides[it] } ?: accountState?.like ?: LikeStatus.None
@@ -244,10 +219,6 @@ class PlayerState(private val scope: CoroutineScope) {
     private var loadJob: Job? = null
 
     private var pendingStart: VideoItem? = null
-
-
-
-
 
     private val known = HashMap<String, VideoItem>()
 
@@ -263,7 +234,6 @@ class PlayerState(private val scope: CoroutineScope) {
         AudioOnly.set(false)
         runCatching { applyVideoTrack() }
         if (expand) expanded = true
-        // TV: open straight into fullscreen like YouTube; Back drops to the watch page.
         if (expand && TvMode.isTv) fullscreen = true
         if (current?.id == item.id && error == null) return
         known[item.id] = item
@@ -286,10 +256,6 @@ class PlayerState(private val scope: CoroutineScope) {
     fun openMusic(item: VideoItem, expand: Boolean = true) {
         openMusicQueue(listOf(item), 0, expand)
     }
-
-    
-
-
 
     fun openMusicQueue(items: List<VideoItem>, index: Int, expand: Boolean = true) {
         val item = items.getOrNull(index) ?: return
@@ -314,18 +280,12 @@ class PlayerState(private val scope: CoroutineScope) {
         continueIfEnded(player)
     }
 
-    
-
-
-
-
     private var openedAt = 0L
 
     private fun show(item: VideoItem, startPlayback: Boolean) {
         endHoldSpeed()
         openedAt = android.os.SystemClock.elapsedRealtime()
         Log.i("YTXTubeTime", "open ${item.id}")
-        // "Play in background" belongs to one video only.
         if (backgroundAudioFor != null && backgroundAudioFor != item.id) clearBackgroundAudio()
         if (startPlayback) Net.prewarmMediaConnection()
         webPlayerEnabled = false
@@ -391,7 +351,6 @@ class PlayerState(private val scope: CoroutineScope) {
 
                     if (!aspectFromFrames) d.aspect?.let { videoAspect = it }
 
-
                     comments.load(item.id)
                     known[item.id] = d.item
                     d.related.forEach { known[it.id] = it }
@@ -439,8 +398,6 @@ class PlayerState(private val scope: CoroutineScope) {
             .setMediaMetadata(metadata)
             .apply {
                 if (localUri != null) {
-
-
                     setRequestMetadata(
                         MediaItem.RequestMetadata.Builder().setMediaUri(localUri.toUri()).build(),
                     )
@@ -458,11 +415,6 @@ class PlayerState(private val scope: CoroutineScope) {
         refreshSubtitleSelection()
         refreshTracks()
     }
-
-    
-
-
-
 
     private fun setCurrentMedia(
         player: MediaController,
@@ -489,7 +441,6 @@ class PlayerState(private val scope: CoroutineScope) {
         continueIfEnded(player)
     }
 
-
     private fun continueIfEnded(player: MediaController) {
         if (player.playbackState == Player.STATE_ENDED && player.currentMediaItemIndex + 1 < player.mediaItemCount) {
             player.seekTo(player.currentMediaItemIndex + 1, 0L)
@@ -505,7 +456,6 @@ class PlayerState(private val scope: CoroutineScope) {
         actionMessage = "Added to queue"
         continueIfEnded(player)
     }
-
 
     fun playFromQueue(index: Int) {
         val player = controller ?: return
@@ -599,7 +549,6 @@ class PlayerState(private val scope: CoroutineScope) {
     val segments: List<SponsorBlock.Segment>
         get() = current?.id?.let { SponsorBlock.forUi[it] }.orEmpty()
 
-
     val askSegment: SponsorBlock.Segment?
         get() = if (!SponsorBlock.enabled) null else segments.firstOrNull {
             it.action == SponsorBlock.Action.Button && positionMs in it.startMs until it.endMs - 500
@@ -612,7 +561,6 @@ class PlayerState(private val scope: CoroutineScope) {
         SponsorBlock.lastSkip = null
     }
 
-
     fun refreshAccountState() {
         val item = current ?: return
         accountState = null
@@ -624,7 +572,6 @@ class PlayerState(private val scope: CoroutineScope) {
                 .onFailure { Log.w(TAG, "account state for ${item.id}", it) }
         }
     }
-
 
     val displayLikes: Long
         get() {
@@ -649,10 +596,6 @@ class PlayerState(private val scope: CoroutineScope) {
 
     private fun dislikeWeight(status: LikeStatus): Long = if (status == LikeStatus.Dislike) 1L else 0L
 
-    /**
-     * Tapping a thumb is optimistic for everyone, signed in or not. The visible count moves
-     * immediately; the network call only decides whether the choice survives a restart.
-     */
     fun setLike(target: LikeStatus) {
         val id = current?.id ?: return
         val before = currentLike
@@ -711,7 +654,6 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
-
     fun saveToWatchLater(video: VideoItem) {
         scope.launch {
             runCatching { InnerTube.setInWatchLater(video.id, true) }
@@ -723,22 +665,12 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
-    
-
-
-
     fun setQuality(height: Int?, preferHdr: Boolean = QualityPreference.hdr) {
         QualityPreference.set(height, preferHdr)
         val player = controller ?: return
         val item = details?.item ?: current ?: return
 
-        // The service rebuilds the source from the exact rendition StreamSelection
-        // picked. Forcing a min/max height here would filter that rendition out when
-        // an HDR row falls back to a lower SDR height, leaving the player with no
-        // video track at all.
         if (item.isLive) {
-            // Live used to only relabel the quality while playback stayed on Auto. Now the
-            // chosen rendition of the HLS stream is actually pinned (or Auto restored).
             val applied = applyLiveQuality(height)
             details = details?.copy(quality = applied?.let { "${it}p" } ?: "Live")
             return
@@ -753,11 +685,9 @@ class PlayerState(private val scope: CoroutineScope) {
         )
     }
 
-    /** Quality tiers the current live stream really offers, highest first; empty when not live. */
     var liveQualities by mutableStateOf<List<Int>>(emptyList())
         private set
 
-    /** A live video track is pinned through a track-selection override. */
     private var liveOverride = false
 
     private fun liveVideoTracks(): Pair<androidx.media3.common.Tracks.Group, List<Int>>? {
@@ -769,7 +699,6 @@ class PlayerState(private val scope: CoroutineScope) {
         return group to tiers
     }
 
-    /** Pins the live rendition closest to [height] (null = Auto). Returns the tier now pinned. */
     private fun applyLiveQuality(height: Int?): Int? {
         val player = controller ?: return null
         val params = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
@@ -796,7 +725,6 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
-    /** Refresh the audio-track list from the resolved stream info. */
     fun refreshTracks() {
         val id = current?.id ?: return
         val cached = StreamCache.get(id)
@@ -817,17 +745,12 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
-    /** A saved language that this video does not offer falls back to Original, not silence. */
     private fun syncAudioPreference(info: org.schabi.newpipe.extractor.stream.StreamInfo) {
         val wanted = AudioTrackPreference.key ?: return
         val offered = StreamSelection.audioTracks(info)
         if (offered.none { it.key == wanted || wanted.startsWith(it.key) }) AudioTrackPreference.reset()
     }
 
-    /**
-     * Swap the audio rendition without losing the place. The service re-reads the persisted
-     * preference when it builds the next media source.
-     */
     fun setAudioTrack(option: AudioTrackOption?) {
         AudioTrackPreference.set(if (option == null || option.isOriginal) null else option.key, option?.label ?: "Original")
         val player = controller ?: return
@@ -864,7 +787,7 @@ class PlayerState(private val scope: CoroutineScope) {
     var translationBusy by mutableStateOf(false)
         private set
     private var translationJob: Job? = null
-    private var translatedLines by mutableStateOf<Map<String, String>>(emptyMap())
+    private var translatedLines by mutableStateOf>(emptyMap())
 
     fun setDualCaptions(enabled: Boolean, target: String = dualTargetLanguage) {
         dualCaptionsEnabled = enabled
@@ -1026,7 +949,6 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
-
     fun retry() = current?.let { item ->
         StreamRecovery.reset(item.id)
         StreamCache.invalidate(item.id)
@@ -1072,7 +994,6 @@ class PlayerState(private val scope: CoroutineScope) {
         scrubDragging = true
     }
 
-
     fun endScrubDragging(seekMs: Long? = null) {
         if (!scrubDragging) return
         val player = controller
@@ -1083,7 +1004,6 @@ class PlayerState(private val scope: CoroutineScope) {
         if (seekMs != null) seekTo(seekMs)
         if (resume) player?.play()
     }
-
 
     fun beginHoldSpeed(): Boolean {
         val player = controller ?: return false
@@ -1102,18 +1022,12 @@ class PlayerState(private val scope: CoroutineScope) {
         previewSpeed(restore)
     }
 
-
     fun previewSpeed(value: Float) {
         val player = controller ?: return
         val s = PlaybackSpeed.snap(value)
         if (player.playbackParameters.speed != s) player.setPlaybackSpeed(s)
         speed = s
     }
-
-    
-
-
-
 
     fun commitSpeed(value: Float) {
         previewSpeed(value)
@@ -1125,13 +1039,6 @@ class PlayerState(private val scope: CoroutineScope) {
 
     fun toggleRememberSpeed() = PlaybackSpeed.setRemember(!PlaybackSpeed.remember, speed)
 
-
-    /**
-     * "Play in background" button: turns audio-only background playback on for the current video
-     * (video decoding stops, playback continues when the app is left or the screen locks), or
-     * back to normal video. Uses the existing session and track switching; saved settings are
-     * not touched and the app is not minimized.
-     */
     fun toggleBackgroundAudio() {
         val id = current?.id ?: return
         if (backgroundAudioActive) {
@@ -1146,11 +1053,6 @@ class PlayerState(private val scope: CoroutineScope) {
         }
     }
 
-    /**
-     * "Play in background" from Shorts: the Short continues in the main player (the one with the
-     * notification, lock-screen and headset controls) as audio only, from the same position.
-     * Same per-video, unsaved override as the button on the video screen.
-     */
     fun playInBackground(item: VideoItem, positionMs: Long) {
         backgroundAudioFor = item.id
         BackgroundAudioOverride.videoId = item.id
@@ -1161,7 +1063,6 @@ class PlayerState(private val scope: CoroutineScope) {
         if (alreadyOpen) controller?.let { it.seekTo(positionMs); it.play() }
     }
 
-    /** One-shot start position for [startPlayback] (Short handed off mid-way). */
     private var startAt: Pair<String, Long>? = null
 
     private fun clearBackgroundAudio() {
@@ -1175,11 +1076,6 @@ class PlayerState(private val scope: CoroutineScope) {
         AudioOnly.set(on)
         applyVideoTrack()
     }
-
-    
-
-
-
 
     fun setBackground(
         background: Boolean,
@@ -1197,8 +1093,6 @@ class PlayerState(private val scope: CoroutineScope) {
             )
             if (action == BackgroundPlaybackPolicy.OnBackground.None && changingConfigurations) return
             if (action == BackgroundPlaybackPolicy.OnBackground.Pause) {
-                // Background playback is off: pause instead of continuing audio-only. This
-                // goes through the session, so the notification and lock screen stay in sync.
                 Log.i(TAG, "app left the foreground with background playback off; pausing")
                 controller?.pause()
             }
@@ -1209,23 +1103,12 @@ class PlayerState(private val scope: CoroutineScope) {
         applyVideoTrack()
     }
 
-    
-
-
-
-
-
     private var wantBackground = false
 
-    /** [error] came from the player (not from loading details), so recovery may clear it. */
     private var errorFromPlayback = false
-
 
     private fun applyVideoTrack() {
         runCatching {
-            // Music keeps its video track alive in the background. Toggling it off and on
-            // made the decoder re-init, which is the audible dip heard when reopening the
-            // app during background playback.
             if (isMusicMode) return
             val off = AudioOnly.enabled || backgroundAudioActive || wantBackground
             val player = controller ?: return
@@ -1253,11 +1136,6 @@ class PlayerState(private val scope: CoroutineScope) {
         error = null
         loading = false
     }
-
-    
-
-
-
 
     internal fun onConnected() {
         syncFromPlayer()
@@ -1324,7 +1202,6 @@ class PlayerState(private val scope: CoroutineScope) {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_READY && errorFromPlayback) {
-                // The service recovered by itself (network back, stream re-extracted).
                 errorFromPlayback = false
                 error = null
             }
@@ -1366,7 +1243,6 @@ class PlayerState(private val scope: CoroutineScope) {
             if (current?.isLive == true) {
                 val offered = liveVideoTracks()?.second?.let(LiveQuality::offered).orEmpty()
                 if (offered != liveQualities) liveQualities = offered
-                // A saved quality applies to live too, once its renditions are known.
                 val saved = QualityPreference.height
                 if (saved != null && !liveOverride && offered.isNotEmpty()) {
                     applyLiveQuality(saved)?.let { details = details?.copy(quality = "${it}p") }
@@ -1389,18 +1265,22 @@ class PlayerState(private val scope: CoroutineScope) {
                 .firstOrNull()?.responseCode
             Log.w(TAG, "playback error ${e.errorCodeName}${status?.let { " (HTTP $it)" } ?: ""} for ${current?.id}", e)
 
-            // StreamRecoverer owns the retry sequence. Do not surface the first error
-            // while its client/cache recovery stages are still running.
-            if (StreamRecovery.recovering == current?.id) return
+            val vid = current?.id
+            if (vid != null && StreamRecovery.recovering == vid) return
 
             val recoverableSourceFailure =
                 status in setOf(400, 403, 404, 410) ||
                     e.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
                     e.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
-            if (recoverableSourceFailure) {
-                errorFromPlayback = true
-                error = "Direct stream unavailable${status?.let { " (HTTP $it)" }.orEmpty()}. Opening YouTube web player."
-                if (!webPlayerEnabled) switchWebPlayer(true)
+            if (recoverableSourceFailure && vid != null && current?.localUri == null) {
+                // Allow StreamRecoverer in PlaybackService to exhaust native client fallbacks first.
+                // If StreamRecovery.failed is already set for this video, switch to WebPlayer.
+                if (StreamRecovery.failed?.first == vid) {
+                    errorFromPlayback = true
+                    error = StreamRecovery.failed?.second
+                        ?: "Direct stream unavailable${status?.let { " (HTTP $it)" }.orEmpty()}. Opening YouTube web player."
+                    if (!webPlayerEnabled) switchWebPlayer(true)
+                }
                 return
             }
 
@@ -1439,7 +1319,6 @@ class PlayerState(private val scope: CoroutineScope) {
         val w = (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt()
         describeFormat(w, videoSize.height)
     }
-
 
     private fun describeFormat(width: Int, height: Int) {
         val tier = qualityTier(width, height)
