@@ -283,6 +283,9 @@ class PlaybackService : MediaSessionService() {
         override fun getState(): State {
             val state = super.getState()
             val commands = state.availableCommands.buildUpon()
+            // Ensure 10s seek commands are always exposed to notification & lockscreen
+            commands.add(Player.COMMAND_SEEK_BACK)
+            commands.add(Player.COMMAND_SEEK_FORWARD)
             if (!engine.hasPreviousMediaItem()) commands.remove(Player.COMMAND_SEEK_TO_PREVIOUS)
             if (!engine.hasNextMediaItem()) {
                 commands.remove(Player.COMMAND_SEEK_TO_NEXT)
@@ -407,22 +410,22 @@ class PlaybackService : MediaSessionService() {
                         CommandButton.Builder(CommandButton.ICON_PREVIOUS)
                             .setDisplayName("Previous video")
                             .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                            .setSlots(CommandButton.SLOT_BACK)
-                            .build(),
-                        CommandButton.Builder(CommandButton.ICON_NEXT)
-                            .setDisplayName("Next video")
-                            .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                            .setSlots(CommandButton.SLOT_FORWARD)
+                            .setSlots(CommandButton.SLOT_BACK, CommandButton.SLOT_OVERFLOW)
                             .build(),
                         CommandButton.Builder(CommandButton.ICON_SKIP_BACK_10)
                             .setDisplayName("Rewind 10 seconds")
                             .setPlayerCommand(Player.COMMAND_SEEK_BACK)
-                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .setSlots(CommandButton.SLOT_BACK, CommandButton.SLOT_OVERFLOW)
                             .build(),
                         CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD_10)
                             .setDisplayName("Forward 10 seconds")
                             .setPlayerCommand(Player.COMMAND_SEEK_FORWARD)
-                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .setSlots(CommandButton.SLOT_FORWARD, CommandButton.SLOT_OVERFLOW)
+                            .build(),
+                        CommandButton.Builder(CommandButton.ICON_NEXT)
+                            .setDisplayName("Next video")
+                            .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                            .setSlots(CommandButton.SLOT_FORWARD, CommandButton.SLOT_OVERFLOW)
                             .build(),
                         CommandButton.Builder(CommandButton.ICON_UNDEFINED)
                             .setDisplayName("Close")
@@ -823,17 +826,17 @@ internal object YouTubeStreamHttp {
                         val headers = HashMap(dataSpec.httpRequestHeaders)
                         headers.keys.removeAll { it.equals("User-Agent", ignoreCase = true) }
                         headers["User-Agent"] = ua
-                        
+
                         val parsed = Uri.parse(url)
                         val clientName = parsed.getQueryParameter("c")?.uppercase().orEmpty()
                         val isWebClient = clientName.contains("WEB") || (clientName.isBlank() && ua == Net.USER_AGENT)
-                        
+
                         if (isWebClient) {
                             headers.putIfAbsent("Origin", "https://www.youtube.com")
                             headers.putIfAbsent("Referer", "https://www.youtube.com/")
                         }
-                        
-                        VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }?.let {
+
+                        PlayerFallback.currentVisitorData()?.let {
                             headers.putIfAbsent("X-Goog-Visitor-Id", it)
                         }
 
@@ -842,7 +845,7 @@ internal object YouTubeStreamHttp {
                             headers.keys.removeAll { it.equals("Cookie", ignoreCase = true) }
                             headers["Cookie"] = cookies
                         }
-                        
+
                         val updatedSpec = dataSpec.buildUpon()
                             .setHttpRequestHeaders(headers)
                             .build()
