@@ -1,6 +1,7 @@
 package com.tensei.ytxtube
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,6 +37,33 @@ class PlayerFallbackTest {
     @Test
     fun loginRequiredStillUsesFallback() {
         assertTrue(PlayerFallback.isBlocked("""{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}"""))
+    }
+    @Test
+    fun streamingPoTokenIsAppendedToMediaUrl() {
+        val url = "https://rr1.googlevideo.com/videoplayback?id=abc"
+        val updated = PlayerFallback.appendStreamingDataPoToken(url, "stream-token")
+
+        assertEquals(
+            listOf("stream-token"),
+            okhttp3.HttpUrl.get(updated).queryParameterValues("pot"),
+        )
+    }
+
+    @Test
+    fun streamingPoTokenReplacesExpiredTokenInsteadOfDuplicatingIt() {
+        val url = "https://rr1.googlevideo.com/videoplayback?id=abc&pot=expired"
+        val updated = PlayerFallback.appendStreamingDataPoToken(url, "fresh-token")
+
+        assertEquals(
+            listOf("fresh-token"),
+            okhttp3.HttpUrl.get(updated).queryParameterValues("pot"),
+        )
+    }
+
+    @Test
+    fun missingStreamingPoTokenLeavesMediaUrlUnchanged() {
+        val url = "https://rr1.googlevideo.com/videoplayback?id=abc"
+        assertEquals(url, PlayerFallback.appendStreamingDataPoToken(url, null))
     }
 
     private fun ok(streamingData: String): String =
