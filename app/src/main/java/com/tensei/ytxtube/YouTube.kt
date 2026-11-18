@@ -164,18 +164,7 @@ object YouTube {
 
     fun watchUrl(id: String) = "https://www.youtube.com/watch?v=$id"
 
-    
-
-
-
-
-
-
-
-
     suspend fun trending(next: String? = null): FeedPage = withContext(Dispatchers.IO) {
-
-
         val extractor = service.kioskList.getExtractorById("Trending", null)
         val items: List<StreamInfoItem>
         val nextPage: String?
@@ -188,7 +177,6 @@ object YouTube {
             items = more.items.filterIsInstance<StreamInfoItem>()
             nextPage = more.nextPage?.url
         }
-
 
         val videos = items.mapNotNull { it.toVideoItem() }.filter { !it.isLive }
         FeedPage(videos, nextPage)
@@ -239,6 +227,8 @@ object YouTube {
         val info = StreamCache.getOrLoad(id)
         HdrFormats.install(id, info)
         val picked = StreamSelection.pick(info)
+        val direct = PlayerFallback.directStreams(id)
+        val isPlayable = picked.isPlayable || direct != null
         val isLive = info.streamType == StreamType.LIVE_STREAM
         VideoDetails(
             item = VideoItem(
@@ -262,7 +252,7 @@ object YouTube {
             related = info.relatedItems.filterIsInstance<StreamInfoItem>().mapNotNull { it.toVideoItem() }.let { list ->
                 if (list.isNotEmpty()) list else fetchFallbackRelated(id, info.name)
             },
-            playable = picked.isPlayable,
+            playable = isPlayable,
             quality = picked.playedHeight?.let { "${it}p${if (picked.hdr) " HDR" else ""}" }
                 ?: if (isLive) "Live" else null,
             qualities = StreamSelection.heights(info),
@@ -318,8 +308,6 @@ object YouTube {
         }.getOrDefault(emptyList())
     }
 
-
-
     suspend fun channel(url: String): ChannelDetails = withContext(Dispatchers.IO) {
         val info = ChannelInfo.getInfo(service, url)
         val videosTab = info.tabs.firstOrNull { it.contentFilters.contains(ChannelTabs.VIDEOS) }
@@ -343,10 +331,6 @@ object YouTube {
         if (!path.startsWith("@")) return null
         return path.removePrefix("@").substringBefore('/').substringBefore('?').ifBlank { null }
     }
-
-    
-
-
 
     suspend fun channelVideos(channel: ChannelDetails, token: String?): FeedPage {
         val page = InnerTube.channelVideos(channel.id, token)
@@ -392,13 +376,8 @@ object YouTube {
         )
     }
 
-
     private fun List<Image>.bestUrl(targetWidth: Int = 1080): String? =
         filter { it.width > 0 }.minByOrNull { abs(it.width - targetWidth) }?.url ?: firstOrNull()?.url
-
-    
-
-
 
     private fun uploadedText(textual: String?, date: DateWrapper?): String? {
         val then = date?.offsetDateTime()?.toInstant()
@@ -425,17 +404,12 @@ object YouTube {
         }
     }
 
-
     fun friendlyError(t: Throwable): String = when (t) {
         is AgeRestrictedContentException -> "This video is age-restricted and needs a YouTube account to watch."
         is GeographicRestrictionException -> "This video isn't available in your country."
         is org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException ->
-
-
             "YouTube is blocking this video for a moment. Try again in a minute, or switch networks."
         is org.schabi.newpipe.extractor.exceptions.PrivateContentException -> "This video is private."
-
-
         is ContentNotAvailableException ->
             if (t.message.orEmpty().contains("member", ignoreCase = true) || t is org.schabi.newpipe.extractor.exceptions.PaidContentException)
                 "This is a members-only video. Y.tube can't play members-only videos yet."
@@ -445,10 +419,6 @@ object YouTube {
         else -> "Something went wrong loading this. Try again."
     }
 }
-
-
-
-
 
 
 object StreamCache {
@@ -479,8 +449,6 @@ object StreamCache {
 
     fun getOrLoad(id: String, forceClientFallback: Boolean = false, fallbackClientIndex: Int = 0): StreamInfo {
         if (!forceClientFallback) get(id)?.let { return it }
-        // A generation token prevents a slow, invalidated extraction from repopulating
-        // the cache with a URL that was already rejected by the player.
         val token = generations.snapshot(id)
 
         if (forceClientFallback) {
@@ -495,15 +463,30 @@ object StreamCache {
             fun extract(): StreamInfo = StreamInfo.getInfo(ServiceList.YouTube, YouTube.watchUrl(id))
 
             val info = try {
-                extract()
+                val res = extract()
+                if (!StreamSelection.pick(res).isPlayable && PlayerFallback.directStreams(id) == null) {
+                    if (!forceClientFallback && PlayerFallback.forceClientFallback(id, 0)) {
+                        runCatching { extract() }.getOrDefault(res)
+                    } else res
+                } else res
             } catch (first: Throwable) {
-                if (forceClientFallback || !PlayerFallback.forceClientFallback(id)) throw first
-                try {
-                    extract()
-                } catch (fallbackError: Throwable) {
-                    fallbackError.addSuppressed(first)
-                    throw fallbackError
+                if (forceClientFallback) throw first
+                var recovered: StreamInfo? = null
+                var lastErr: Throwable = first
+                for (clientIdx in 0..3) {
+                    if (!PlayerFallback.forceClientFallback(id, clientIdx)) break
+                    try {
+                        val candidate = extract()
+                        if (StreamSelection.pick(candidate).isPlayable || PlayerFallback.directStreams(id) != null) {
+                            recovered = candidate
+                            break
+                        }
+                    } catch (fallbackError: Throwable) {
+                        fallbackError.addSuppressed(lastErr)
+                        lastErr = fallbackError
+                    }
                 }
+                recovered ?: throw lastErr
             }
 
             val published = generations.publishIfCurrent(id, token) {
@@ -518,8 +501,13 @@ object StreamCache {
             val picked = StreamSelection.pick(info)
             Net.noteMediaHost((picked.video ?: picked.muxed)?.content)
             val metadata = PlayerFallback.metadata(id)
-            listOfNotNull(picked.video?.content, picked.muxed?.content, picked.audio?.content)
-                .forEach { url -> metadata?.let { Net.registerMediaUserAgent(url, it.userAgent) } }
+            if (metadata != null) {
+                info.videoOnlyStreams.forEach { s -> if (s.isUrl) Net.registerMediaUserAgent(s.content, metadata.userAgent) }
+                info.videoStreams.forEach { s -> if (s.isUrl) Net.registerMediaUserAgent(s.content, metadata.userAgent) }
+                info.audioStreams.forEach { s -> if (s.isUrl) Net.registerMediaUserAgent(s.content, metadata.userAgent) }
+                info.hlsUrl?.takeIf { it.isNotBlank() }?.let { Net.registerMediaUserAgent(it, metadata.userAgent) }
+                info.dashMpdUrl?.takeIf { it.isNotBlank() }?.let { Net.registerMediaUserAgent(it, metadata.userAgent) }
+            }
             CaptionTracks.put(id, CaptionTracks.fromStreamInfo(info))
             if (info.subtitles.isEmpty()) runCatching { CaptionTracks.load(id) }
             info
@@ -545,9 +533,6 @@ object StreamCache {
         ids.forEach(::prefetch)
     }
 }
-
-
-
 
 enum class PlaybackQualityMode(val label: String, val subtitle: String) {
     AUTO("Auto (Recommended)", "Optimal quality based on your network speed"),
@@ -668,13 +653,8 @@ object QualityPreference {
 
 val QUALITY_LADDER = intArrayOf(144, 240, 360, 480, 720, 1080, 1440, 2160, 4320)
 
-
-
-
-
 fun qualityTier(width: Int, height: Int): Int {
     if (height <= 0) return 0
-    // Portrait video (Shorts) is sized by its short side: a 1080x1920 short is 1080p, not 2160p.
     val basis = when {
         width <= 0 -> height
         width < height -> width
@@ -686,22 +666,17 @@ fun qualityTier(width: Int, height: Int): Int {
 
 private fun VideoStream.tier() = qualityTier(width, height)
 
-/** Whether this rendition's real (or typical) bitrate fits the sustainable budget. */
 private fun VideoStream.fitsKbps(budgetKbps: Int): Boolean {
     val bits = bitrate
     val needed = if (bits > 0) bits / 1000 else NetworkSpeed.typicalKbps(tier())
     return needed <= budgetKbps
 }
 
-/** 1 when the device decodes this rendition in hardware (or cannot tell), else 0. */
 private fun VideoStream.hardwareRank(): Int = VideoDecoders.hardwareRank(codec, width, height, fps)
 
 private fun videoOrder(hdr: Boolean, formatRank: (MediaFormat?) -> Int): Comparator<VideoStream> =
     compareBy<VideoStream> { it.tier() }
         .thenBy { if (hdr && HdrSupport.isHdr(it)) 1 else 0 }
-        // At the same resolution, a hardware-decodable codec beats a software-only one: a
-        // higher-bitrate AV1 rendition on a device without an AV1 decoder drops frames and
-        // drains the battery, while H.264/VP9 plays smoothly on the hardware decoder.
         .thenBy { it.hardwareRank() }
         .thenBy { it.fps }
         .thenBy { it.bitrate }
@@ -729,10 +704,6 @@ object StreamSelection {
         val hdr: Boolean get() = (if (usesSeparate) video else muxed)?.let(HdrSupport::isHdrCodec) == true
     }
 
-    /**
-     * HDR renditions are only used when the viewer asked for HDR and the device can show it.
-     * If HDR is unavailable at the chosen height, the same height in SDR is the fallback.
-     */
     private fun usableVideos(info: StreamInfo, allowHdr: Boolean): List<VideoStream> {
         val all = info.videoOnlyStreams
             .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.height > 0 }
@@ -751,9 +722,6 @@ object StreamSelection {
         }
         val chosen = QualityPreference.height
 
-        // Auto uses the measured throughput, not the link speed: a Wi-Fi link can report
-        // hundreds of megabits while the connection behind it cannot feed 4K. A manual
-        // choice still wins and is honoured as the closest rendition at or below it.
         val hdr = QualityPreference.hdr && HdrSupport.isSupported
         val videoMode = QualityPreference.videoQualityMode
         val candidates = usableVideos(info, hdr)
@@ -789,8 +757,6 @@ object StreamSelection {
             }
         }
 
-
-
         val audio = selectAudio(info)
         val muxedCandidates = info.videoStreams
             .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
@@ -825,11 +791,6 @@ object StreamSelection {
         return Picked(video, audio, muxed, hls)
     }
 
-    /**
-     * Every logical audio track the extractor can actually serve, Original first. One row per
-     * track (highest bitrate encoding), never one per itag; untagged entries are dropped once the
-     * response names real tracks, because that bucket is the same default audio arriving twice.
-     */
     fun audioTracks(info: StreamInfo): List<AudioTrackOption> {
         val usable = info.audioStreams.filter {
             it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP
@@ -861,32 +822,20 @@ object StreamSelection {
             }
     }
 
-    /** The alternate languages shown in the sheet; Original is its own fixed first row. */
     fun audioOptions(info: StreamInfo): List<AudioTrackOption> =
         audioTracks(info).filterNot { it.isOriginal }
 
-    /**
-     * Audio selection. Original is the default on a fresh install and stays selected until the
-     * viewer explicitly chooses another track; a stale preference falls back to Original rather
-     * than leaving the video silent.
-     */
     fun selectAudio(info: StreamInfo): AudioStream? {
         val tracks = audioTracks(info)
         if (tracks.isEmpty()) return null
         val wanted = AudioTrackPreference.key
         if (wanted != null) {
             tracks.firstOrNull { it.key == wanted }?.let { return it.stream }
-            // Preferences written by the old key format carried the itag as a suffix.
             tracks.firstOrNull { wanted.startsWith(it.key) }?.let { return it.stream }
         }
         return tracks.firstOrNull { it.isOriginal }?.stream ?: tracks.first().stream
     }
 
-    /**
-     * Shorts use the original audio and the best rendition the measured connection can
-     * sustain. A muxed stream is only the fallback when the video has no separable
-     * adaptive pair; it is usually capped at 360p/720p.
-     */
     fun pickShorts(info: StreamInfo): Picked {
         val chosen = QualityPreference.height
         val hdr = QualityPreference.hdr && HdrSupport.isSupported
@@ -969,7 +918,6 @@ object StreamSelection {
         return Picked(null, null, muxed)
     }
 
-    /** The best side-loadable caption track for the current caption language. */
     fun subtitleFor(info: StreamInfo): SubtitlesStream? {
         val usable = info.subtitles.filter {
             it.isUrl && it.content.isNotBlank() && subtitleMimeType(it) != null
@@ -986,18 +934,11 @@ object StreamSelection {
         it.isUrl && it.content.isNotBlank() && subtitleMimeType(it) != null
     }
 
-    
-
-
-
-
-
     fun autoLadder(info: StreamInfo, maxTier: Int = MAX_TIER): List<VideoStream> {
         val hdr = QualityPreference.hdr && HdrSupport.isSupported
         val all = usableVideos(info, hdr).filter {
             it.tier() in 1..maxTier && it.itagItem != null
         }
-        // One codec family only, preferring one the hardware decodes (see CodecLadder).
         val byFamily = all.groupBy { VideoCodecFamily.of(it.codec) }
             .mapValues { (family, streams) -> streams.filter { VideoDecoders.canDecode(family, it.width, it.height, it.fps) } }
         val family = CodecLadder.choose(
@@ -1026,7 +967,6 @@ object StreamSelection {
     fun heights(info: StreamInfo): List<Int> {
         val allProgressive = info.videoOnlyStreams
             .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP && it.height > 0 }
-        // HDR has its own rows; these are the SDR renditions at the same heights.
         val progressive = allProgressive.filterNot(HdrSupport::isHdrCodec).map { it.tier() }
             .ifEmpty { allProgressive.map { it.tier() } }
         if (progressive.isNotEmpty()) {
@@ -1044,10 +984,6 @@ object StreamSelection {
         return emptyList()
     }
 }
-
-
-
-
 
 private val YT_VIDEO_ID_IN_THUMB = Regex("""i\.ytimg\.com/vi/([\w-]{11})/""")
 
@@ -1069,9 +1005,7 @@ fun ytimgThumbnailWidth(url: String): Int {
     }
 }
 
-
 fun feedThumbnailUrl(videoId: String): String = "https://i.ytimg.com/vi/$videoId/hq720.jpg"
-
 
 fun sharpenFeedThumbnail(apiUrl: String?, videoId: String): String {
     val api = apiUrl?.trim()?.ifBlank { null }
@@ -1084,10 +1018,8 @@ fun sharpenFeedThumbnail(apiUrl: String?, videoId: String): String {
     return feedThumbnailUrl(videoId)
 }
 
-
 fun channelAvatarEdgePx(url: String): Int =
     Regex("=s(\\d+)").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-
 
 fun normalizeChannelAvatarUrl(url: String): String {
     if ("/ytc/" !in url || "googleusercontent.com" in url) return url
@@ -1095,7 +1027,6 @@ fun normalizeChannelAvatarUrl(url: String): String {
     val size = Regex("=s(\\d+)").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 88
     return "https://yt3.googleusercontent.com/ytc/$id=s$size-c-k-c0x00ffffff-no-rj"
 }
-
 
 fun sharpenChannelAvatarUrl(url: String, minEdgePx: Int): String {
     val normalized = normalizeChannelAvatarUrl(url)
@@ -1121,12 +1052,6 @@ internal fun upscaleGgphtThumbnail(url: String, targetWidth: Int): String {
         "$url=w$targetWidth-h$height"
     }
 }
-
-
-
-
-
-
 
 fun fetchDislikeCount(videoId: String): Long {
     return runCatching {
