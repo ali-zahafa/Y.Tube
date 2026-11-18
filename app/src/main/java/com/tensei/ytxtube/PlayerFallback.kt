@@ -11,7 +11,6 @@ object PlayerFallback {
     private const val TAG = "PlayerFallback"
     private const val CACHE_MS = 3 * 60 * 1000L
 
-
     data class SourceMetadata(
         val clientName: String,
         val clientVersion: String,
@@ -19,6 +18,7 @@ object PlayerFallback {
         val visitorData: String?,
         val poTokenPresent: Boolean,
     )
+
     private class Cached(val at: Long, val answer: JSONObject, val source: SourceMetadata)
     private val cache = ConcurrentHashMap<String, Cached>()
     private val forcedClients = ConcurrentHashMap.newKeySet<String>()
@@ -27,7 +27,6 @@ object PlayerFallback {
     private val cacheGenerations = StreamCacheGeneration()
 
     fun lastFailureReason(videoId: String): String? = failureReasons[videoId]
-
 
     data class DirectStreams(
         val videoUrl: String?,
@@ -56,9 +55,8 @@ object PlayerFallback {
         val audio = audios.maxByOrNull(::bitrate)?.optString("url")
         val hls = streaming.optString("hlsManifestUrl").takeIf { it.startsWith("https://") }
         val dash = streaming.optString("dashManifestUrl").takeIf { it.startsWith("https://") }
-        if (muxed == null && video == null && hls == null && dash == null) return null
-        
-        // Ensure URLs extracted directly receive the correct client User-Agent
+        if (muxed == null && (video == null || audio == null) && hls == null && dash == null) return null
+
         listOfNotNull(muxed, video, audio, hls, dash).forEach {
             Net.registerMediaUserAgent(it, saved.source.userAgent)
         }
@@ -66,10 +64,15 @@ object PlayerFallback {
     }
 
     fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
+
+    fun currentVisitorData(): String? =
+        sourceMetadata.values.firstOrNull { !it.visitorData.isNullOrBlank() }?.visitorData
+
     fun invalidate(videoId: String) {
         cacheGenerations.invalidate(videoId)
         cache.remove(videoId); forcedClients.remove(videoId); sourceMetadata.remove(videoId); failureReasons.remove(videoId)
     }
+
     fun invalidateAll() {
         cacheGenerations.invalidateAll()
         cache.clear(); forcedClients.clear(); sourceMetadata.clear(); failureReasons.clear()
@@ -80,9 +83,9 @@ object PlayerFallback {
         val clients = fallbackClients()
         for (index in clientIndex.coerceIn(0, clients.lastIndex)..clients.lastIndex) {
             val cfg = clients[index]
-            val answer = runCatching { ask(videoId, cfg) }.getOrNull() ?: continue
+            val result = runCatching { askWithMeta(videoId, cfg) }.getOrNull() ?: continue
+            val (answer, meta) = result
             if (!isPlayable(answer)) continue
-            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
                 cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
                 sourceMetadata[videoId] = meta
@@ -129,11 +132,11 @@ object PlayerFallback {
     private fun fetchFallback(videoId: String): JSONObject? {
         val token = cacheGenerations.snapshot(videoId)
         for (cfg in fallbackClients()) {
-            val answer = runCatching { ask(videoId, cfg) }
-                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
+            val result = runCatching { askWithMeta(videoId, cfg) }
+                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed:${it.javaClass.simpleName}") }
                 .getOrNull() ?: continue
+            val (answer, meta) = result
             if (!isPlayable(answer)) continue
-            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, VisitorDataProvider.getOrFetch(), false)
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
                 cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
                 sourceMetadata[videoId] = meta
@@ -195,18 +198,18 @@ object PlayerFallback {
         if (streaming.optString("hlsManifestUrl").startsWith("https://")) return true
         if (streaming.optString("dashManifestUrl").startsWith("https://")) return true
 
-        // التعديل الجوهري لحل مشكلة فيديوهات الأطفال: قبول الروابط المشفرة كـ Streams قابلة للتشغيل
-        fun hasDirectUrlOrCipher(arr: JSONArray?): Boolean {
+        // Do not treat cipher-only formats as directly playable in directStreams unless resolved;
+        // verify actual HTTPS URLs exist in formats or adaptiveFormats.
+        fun hasDirectUrl(arr: JSONArray?): Boolean {
             if (arr == null) return false
             for (i in 0 until arr.length()) {
-                val item = arr.optJSONObject(i) ?: continue
-                if (item.optString("url").startsWith("https://")) return true
-                if (item.has("signatureCipher")) return true
+                val url = arr.optJSONObject(i)?.optString("url").orEmpty()
+                if (url.startsWith("https://")) return true
             }
             return false
         }
-        return hasDirectUrlOrCipher(streaming.optJSONArray("formats")) ||
-            hasDirectUrlOrCipher(streaming.optJSONArray("adaptiveFormats"))
+        return hasDirectUrl(streaming.optJSONArray("formats")) ||
+            hasDirectUrl(streaming.optJSONArray("adaptiveFormats"))
     }
 
     internal fun isBlocked(body: String): Boolean {
@@ -216,7 +219,6 @@ object PlayerFallback {
             val status = player.optJSONObject("playabilityStatus")
             val code = status?.optString("status").orEmpty()
             val reason = status?.optString("reason").orEmpty().lowercase()
-            
             if (code.equals("OK", ignoreCase = true)) return !hasPlayableStreams(player)
             if (code.equals("LOGIN_REQUIRED", true) ||
                 code.equals("UNPLAYABLE", true) ||
@@ -232,7 +234,7 @@ object PlayerFallback {
             ("a bot" in lower || "not a bot" in lower || "confirm you" in lower || "error" in lower)
     }
 
-    private fun ask(videoId: String, cfg: ClientConfig): JSONObject {
+    private fun askWithMeta(videoId: String, cfg: ClientConfig): Pair<JSONObject, SourceMetadata> {
         val client = JSONObject()
             .put("clientName", cfg.name)
             .put("clientVersion", cfg.version)
@@ -244,10 +246,10 @@ object PlayerFallback {
             .put("osVersion", cfg.osVersion)
             .put("hl", "en")
             .put("gl", "US")
-        
+
         val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
         visitorData?.let { client.put("visitorData", it) }
-        
+
         var missingToken = false
         val poToken = if (cfg.name == "WEB_EMBEDDED_PLAYER") {
             if (visitorData != null) {
@@ -300,8 +302,7 @@ object PlayerFallback {
                 }
                 val answer = JSONObject(response.body!!.string())
                 val status = answer.optJSONObject("playabilityStatus")?.optString("status") ?: "UNKNOWN"
-                
-                // تحسين نظام تسجيل أسباب الفشل (Diagnostics)
+
                 if (!isPlayable(answer)) {
                     val reason = answer.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
                     if (status.equals("OK", ignoreCase = true)) {
@@ -313,7 +314,8 @@ object PlayerFallback {
                 } else {
                     failureReasons.remove(videoId)
                 }
-                answer
+                val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, visitorData, !poToken.isNullOrBlank())
+                answer to meta
             }
         } catch (error: Throwable) {
             if (failureReasons[videoId].isNullOrBlank()) {
