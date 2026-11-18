@@ -133,7 +133,7 @@ object PlayerFallback {
         val token = cacheGenerations.snapshot(videoId)
         for (cfg in fallbackClients()) {
             val result = runCatching { askWithMeta(videoId, cfg) }
-                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed:${it.javaClass.simpleName}") }
+                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
                 .getOrNull() ?: continue
             val (answer, meta) = result
             if (!isPlayable(answer)) continue
