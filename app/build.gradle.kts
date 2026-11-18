@@ -14,8 +14,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 34
-        versionCode = 252
-        versionName = "2.5.2"
+        versionCode = 253
+        versionName = "2.5.3"
     }
 
     val releaseKeystore = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE").orNull
