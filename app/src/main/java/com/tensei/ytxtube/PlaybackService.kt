@@ -898,8 +898,12 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         }
         PlayerFallback.directStreams(mediaItem.mediaId)?.let { direct ->
             val hls = direct.hlsUrl
-            if (direct.muxedUrl == null && (direct.videoUrl == null || direct.audioUrl == null) && hls != null) {
+            val dash = direct.dashManifestUrl
+            if (!hls.isNullOrBlank()) {
                 return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
+            }
+            if (!dash.isNullOrBlank()) {
+                return dashFactory().createMediaSource(mediaItem.buildUpon().setUri(dash).build())
             }
             // Prefer the complete progressive stream when offered. A valid muxed
             // URL should not be hidden by a failing adaptive video/audio pair.
@@ -912,7 +916,6 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
                     directSource(direct.audioUrl, mediaItem),
                 )
             }
-            if (hls != null) return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
         }
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
@@ -974,6 +977,11 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
 
     private fun hlsFactory(): HlsMediaSource.Factory =
         HlsMediaSource.Factory(dataSourceFactory).also { factory ->
+            recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy)
+        }
+
+    private fun dashFactory(): DashMediaSource.Factory =
+        DashMediaSource.Factory(dataSourceFactory).also { factory ->
             recoveryPolicy?.let(factory::setLoadErrorHandlingPolicy)
         }
 

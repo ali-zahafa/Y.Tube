@@ -3,6 +3,7 @@ package com.tensei.ytxtube
 import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
@@ -31,7 +32,10 @@ object PlayerFallback {
     private val cache = ConcurrentHashMap<String, Cached>()
     private val forcedClients = ConcurrentHashMap.newKeySet<String>()
     private val sourceMetadata = ConcurrentHashMap<String, SourceMetadata>()
+    private val failureReasons = ConcurrentHashMap<String, String>()
     private val cacheGenerations = StreamCacheGeneration()
+
+    fun lastFailureReason(videoId: String): String? = failureReasons[videoId]
 
 
     data class DirectStreams(
@@ -39,6 +43,7 @@ object PlayerFallback {
         val audioUrl: String?,
         val muxedUrl: String?,
         val hlsUrl: String?,
+        val dashManifestUrl: String?,
     )
 
     /** Playable URLs from the Innertube response; never require a second NewPipe extraction. */
@@ -59,21 +64,22 @@ object PlayerFallback {
         val video = videos.maxByOrNull(::bitrate)?.optString("url")
         val audio = audios.maxByOrNull(::bitrate)?.optString("url")
         val hls = streaming.optString("hlsManifestUrl").takeIf { it.startsWith("https://") }
-        if (muxed == null && video == null && hls == null) return null
-        listOfNotNull(muxed, video, audio, hls).forEach {
+        val dash = streaming.optString("dashManifestUrl").takeIf { it.startsWith("https://") }
+        if (muxed == null && video == null && hls == null && dash == null) return null
+        listOfNotNull(muxed, video, audio, hls, dash).forEach {
             Net.registerMediaUserAgent(it, saved.source.userAgent)
         }
-        return DirectStreams(video, audio, muxed, hls)
+        return DirectStreams(video, audio, muxed, hls, dash)
     }
 
     fun metadata(videoId: String): SourceMetadata? = sourceMetadata[videoId]
     fun invalidate(videoId: String) {
         cacheGenerations.invalidate(videoId)
-        cache.remove(videoId); forcedClients.remove(videoId); sourceMetadata.remove(videoId)
+        cache.remove(videoId); forcedClients.remove(videoId); sourceMetadata.remove(videoId); failureReasons.remove(videoId)
     }
     fun invalidateAll() {
         cacheGenerations.invalidateAll()
-        cache.clear(); forcedClients.clear(); sourceMetadata.clear()
+        cache.clear(); forcedClients.clear(); sourceMetadata.clear(); failureReasons.clear()
     }
 
     fun forceClientFallback(videoId: String, clientIndex: Int = 0): Boolean {
@@ -198,13 +204,19 @@ object PlayerFallback {
 
     private fun hasPlayableStreams(player: JSONObject): Boolean {
         val streaming = player.optJSONObject("streamingData") ?: return false
-        if ((streaming.opt("hlsManifestUrl") as? String)?.isNotBlank() == true) return true
-        return listOf("formats", "adaptiveFormats").any { key ->
-            val formats = streaming.optJSONArray(key) ?: return@any false
-            (0 until formats.length()).any { index ->
-                formats.optJSONObject(index)?.optString("url")?.startsWith("https://") == true
+        if (streaming.optString("hlsManifestUrl").startsWith("https://")) return true
+        if (streaming.optString("dashManifestUrl").startsWith("https://")) return true
+
+        fun hasDirectUrl(arr: JSONArray?): Boolean {
+            if (arr == null) return false
+            for (i in 0 until arr.length()) {
+                val url = arr.optJSONObject(i)?.optString("url").orEmpty()
+                if (url.startsWith("https://")) return true
             }
+            return false
         }
+        return hasDirectUrl(streaming.optJSONArray("formats")) ||
+            hasDirectUrl(streaming.optJSONArray("adaptiveFormats"))
     }
 
     internal fun isBlocked(body: String): Boolean {
@@ -243,6 +255,11 @@ object PlayerFallback {
             .put("gl", "US")
         val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
         visitorData?.let { client.put("visitorData", it) }
+        val poToken = if (cfg.name == "WEB_EMBEDDED_PLAYER" && visitorData != null) {
+            YTXTubeApplication.poTokenGenerator
+                .getWebClientPoToken(videoId, visitorData)
+                ?.playerRequestPoToken
+        } else null
 
         val body = JSONObject()
             .put("context", JSONObject().put("client", client))
@@ -252,6 +269,9 @@ object PlayerFallback {
             .apply {
                 if (cfg.name == "WEB_EMBEDDED_PLAYER") {
                     put("thirdPartyEmbedUrl", "https://www.youtube.com/embed/$videoId")
+                    if (!poToken.isNullOrBlank()) {
+                        put("serviceIntegrityDimensions", JSONObject().put("poToken", poToken))
+                    }
                 }
             }
 
@@ -275,7 +295,16 @@ object PlayerFallback {
 
         Net.client.newCall(request).execute().use { response ->
             check(response.isSuccessful) { "HTTP ${response.code}" }
-            return JSONObject(response.body!!.string())
+            val answer = JSONObject(response.body!!.string())
+            val status = answer.optJSONObject("playabilityStatus")?.optString("status") ?: "UNKNOWN"
+            if (!isPlayable(answer)) {
+                val reason = answer.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
+                failureReasons[videoId] =
+                    "${cfg.name}:$status${if (reason.isNotBlank()) "($reason)" else ""}"
+            } else {
+                failureReasons.remove(videoId)
+            }
+            return answer
         }
     }
 }

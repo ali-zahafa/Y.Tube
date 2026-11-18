@@ -22,7 +22,7 @@ object StreamRecovery {
     var failed: Pair<String, String>? by androidx.compose.runtime.mutableStateOf(null)
         internal set
 
-    internal enum class Route { DirectProgressive, Muxed, Hls }
+    internal enum class Route { DirectProgressive, Muxed, Hls, Dash }
 
     private val routes = android.util.LruCache<String, Route>(64)
     fun reset(videoId: String) { routes.remove(videoId) }
@@ -127,9 +127,12 @@ internal class StreamRecoverer(
                         val direct = checkNotNull(PlayerFallback.directStreams(id)) {
                             "Fallback player response contained no supported direct URLs"
                         }
-                        if (direct.hlsUrl != null && direct.videoUrl == null && direct.muxedUrl == null)
-                            StreamRecovery.Route.Hls
-                        else StreamRecovery.Route.DirectProgressive
+                        when {
+                            direct.hlsUrl != null -> StreamRecovery.Route.Hls
+                            direct.dashManifestUrl != null -> StreamRecovery.Route.Dash
+                            direct.muxedUrl != null -> StreamRecovery.Route.Muxed
+                            else -> StreamRecovery.Route.DirectProgressive
+                        }
                     }
                 }
             }
@@ -184,8 +187,9 @@ internal class StreamRecoverer(
     private fun diagnosticMessage(id: String, status: Int, stage: Int): String {
         val meta = PlayerFallback.metadata(id)
         val route = StreamRecovery.routeFor(id)?.name ?: "Default"
-        val token = if (YTXTubeApplication.poTokenGenerator.lastStatus.name == "OK") "ok" else "null"
-        return "Playback could not recover. [client=${meta?.clientName ?: "NewPipe"} | route=$route | poToken=$token | http=$status | stage=$stage]"
+        val tokenStatus = YTXTubeApplication.poTokenGenerator.lastStatus.name
+        val reason = PlayerFallback.lastFailureReason(id)?.let { " | reason=$it" } ?: ""
+        return "Playback could not recover. [client=${meta?.clientName ?: "NewPipe"} | route=$route | poToken=$tokenStatus | http=$status | stage=$stage$reason]"
     }
 
     private fun httpStatus(error: Throwable): Int? =
