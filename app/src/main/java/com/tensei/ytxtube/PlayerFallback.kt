@@ -7,15 +7,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
-
-
-
-
-
-
-
-
-
 object PlayerFallback {
     private const val TAG = "PlayerFallback"
     private const val CACHE_MS = 3 * 60 * 1000L
@@ -66,6 +57,8 @@ object PlayerFallback {
         val hls = streaming.optString("hlsManifestUrl").takeIf { it.startsWith("https://") }
         val dash = streaming.optString("dashManifestUrl").takeIf { it.startsWith("https://") }
         if (muxed == null && video == null && hls == null && dash == null) return null
+        
+        // Ensure URLs extracted directly receive the correct client User-Agent
         listOfNotNull(muxed, video, audio, hls, dash).forEach {
             Net.registerMediaUserAgent(it, saved.source.userAgent)
         }
@@ -111,10 +104,6 @@ object PlayerFallback {
         if (cached != null && System.currentTimeMillis() - cached.at < CACHE_MS) return cached.answer
         return fetchFallback(videoId)
     }
-
-    
-
-
 
     fun substitute(url: String, requestBody: ByteArray?, responseText: String?): String? {
         if (responseText == null) return null
@@ -196,7 +185,6 @@ object PlayerFallback {
         val platform: String
     )
 
-
     private fun isPlayable(player: JSONObject): Boolean {
         val status = player.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
         return status.equals("OK", ignoreCase = true) && hasPlayableStreams(player)
@@ -207,16 +195,18 @@ object PlayerFallback {
         if (streaming.optString("hlsManifestUrl").startsWith("https://")) return true
         if (streaming.optString("dashManifestUrl").startsWith("https://")) return true
 
-        fun hasDirectUrl(arr: JSONArray?): Boolean {
+        // التعديل الجوهري لحل مشكلة فيديوهات الأطفال: قبول الروابط المشفرة كـ Streams قابلة للتشغيل
+        fun hasDirectUrlOrCipher(arr: JSONArray?): Boolean {
             if (arr == null) return false
             for (i in 0 until arr.length()) {
-                val url = arr.optJSONObject(i)?.optString("url").orEmpty()
-                if (url.startsWith("https://")) return true
+                val item = arr.optJSONObject(i) ?: continue
+                if (item.optString("url").startsWith("https://")) return true
+                if (item.has("signatureCipher")) return true
             }
             return false
         }
-        return hasDirectUrl(streaming.optJSONArray("formats")) ||
-            hasDirectUrl(streaming.optJSONArray("adaptiveFormats"))
+        return hasDirectUrlOrCipher(streaming.optJSONArray("formats")) ||
+            hasDirectUrlOrCipher(streaming.optJSONArray("adaptiveFormats"))
     }
 
     internal fun isBlocked(body: String): Boolean {
@@ -226,6 +216,7 @@ object PlayerFallback {
             val status = player.optJSONObject("playabilityStatus")
             val code = status?.optString("status").orEmpty()
             val reason = status?.optString("reason").orEmpty().lowercase()
+            
             if (code.equals("OK", ignoreCase = true)) return !hasPlayableStreams(player)
             if (code.equals("LOGIN_REQUIRED", true) ||
                 code.equals("UNPLAYABLE", true) ||
@@ -253,12 +244,20 @@ object PlayerFallback {
             .put("osVersion", cfg.osVersion)
             .put("hl", "en")
             .put("gl", "US")
+        
         val visitorData = VisitorDataProvider.getOrFetch()?.takeIf { it.isNotBlank() }
         visitorData?.let { client.put("visitorData", it) }
-        val poToken = if (cfg.name == "WEB_EMBEDDED_PLAYER" && visitorData != null) {
-            YTXTubeApplication.poTokenGenerator
-                .getWebClientPoToken(videoId, visitorData)
-                ?.playerRequestPoToken
+        
+        var missingToken = false
+        val poToken = if (cfg.name == "WEB_EMBEDDED_PLAYER") {
+            if (visitorData != null) {
+                val tokenResult = YTXTubeApplication.poTokenGenerator.getWebClientPoToken(videoId, visitorData)
+                if (tokenResult?.playerRequestPoToken.isNullOrBlank()) missingToken = true
+                tokenResult?.playerRequestPoToken
+            } else {
+                missingToken = true
+                null
+            }
         } else null
 
         val body = JSONObject()
@@ -301,10 +300,16 @@ object PlayerFallback {
                 }
                 val answer = JSONObject(response.body!!.string())
                 val status = answer.optJSONObject("playabilityStatus")?.optString("status") ?: "UNKNOWN"
+                
+                // تحسين نظام تسجيل أسباب الفشل (Diagnostics)
                 if (!isPlayable(answer)) {
                     val reason = answer.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
-                    failureReasons[videoId] =
-                        "${cfg.name}:$status${if (reason.isNotBlank()) "($reason)" else ""}"
+                    if (status.equals("OK", ignoreCase = true)) {
+                        failureReasons[videoId] = "${cfg.name}:NO_PLAYABLE_STREAMS"
+                    } else {
+                        val tokenMsg = if (missingToken) "[NO_TOKEN] " else ""
+                        failureReasons[videoId] = "${cfg.name}:$tokenMsg$status${if (reason.isNotBlank()) "($reason)" else ""}"
+                    }
                 } else {
                     failureReasons.remove(videoId)
                 }
