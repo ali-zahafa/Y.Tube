@@ -25,7 +25,10 @@ object StreamRecovery {
     internal enum class Route { DirectProgressive, Muxed, Hls, Dash }
 
     private val routes = android.util.LruCache<String, Route>(64)
-    fun reset(videoId: String) { routes.remove(videoId) }
+    fun reset(videoId: String) {
+        routes.remove(videoId)
+        if (failed?.first == videoId) failed = null
+    }
     internal fun routeFor(videoId: String): Route? = routes.get(videoId)
     internal fun setRoute(videoId: String, route: Route) { routes.put(videoId, route) }
 }
@@ -113,9 +116,13 @@ internal class StreamRecoverer(
                         null
                     }
                     2 -> {
-                        StreamCache.invalidate(id)
-                        StreamCache.getOrLoad(id)
-                        StreamRecovery.Route.DirectProgressive
+                        val info = StreamCache.get(id) ?: StreamCache.getOrLoad(id)
+                        val picked = StreamSelection.pick(info)
+                        when {
+                            picked.muxed != null -> StreamRecovery.Route.Muxed
+                            !info.hlsUrl.isNullOrBlank() -> StreamRecovery.Route.Hls
+                            else -> error("No muxed or HLS route available for stage 2")
+                        }
                     }
                     else -> {
                         evictFailedCache(id)
@@ -178,7 +185,6 @@ internal class StreamRecoverer(
         player.removeMediaItem(index)
         player.seekTo(index, positionMs)
         player.prepare()
-        player.seekTo(positionMs)
         player.playWhenReady = playWhenReady
         activeRecovery = false
         StreamRecovery.recovering = null
