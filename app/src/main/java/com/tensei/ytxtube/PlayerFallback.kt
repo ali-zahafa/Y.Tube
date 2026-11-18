@@ -293,18 +293,29 @@ object PlayerFallback {
             }
             .build()
 
-        Net.client.newCall(request).execute().use { response ->
-            check(response.isSuccessful) { "HTTP ${response.code}" }
-            val answer = JSONObject(response.body!!.string())
-            val status = answer.optJSONObject("playabilityStatus")?.optString("status") ?: "UNKNOWN"
-            if (!isPlayable(answer)) {
-                val reason = answer.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
-                failureReasons[videoId] =
-                    "${cfg.name}:$status${if (reason.isNotBlank()) "($reason)" else ""}"
-            } else {
-                failureReasons.remove(videoId)
+        return try {
+            Net.client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    failureReasons[videoId] = "${cfg.name}:HTTP_${response.code}"
+                    error("HTTP ${response.code}")
+                }
+                val answer = JSONObject(response.body!!.string())
+                val status = answer.optJSONObject("playabilityStatus")?.optString("status") ?: "UNKNOWN"
+                if (!isPlayable(answer)) {
+                    val reason = answer.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
+                    failureReasons[videoId] =
+                        "${cfg.name}:$status${if (reason.isNotBlank()) "($reason)" else ""}"
+                } else {
+                    failureReasons.remove(videoId)
+                }
+                answer
             }
-            return answer
+        } catch (error: Throwable) {
+            if (failureReasons[videoId].isNullOrBlank()) {
+                val detail = error.message?.replace(Regex("\\s+"), " ")?.take(160).orEmpty()
+                failureReasons[videoId] = "${cfg.name}:EXCEPTION($detail)"
+            }
+            throw error
         }
     }
 }
