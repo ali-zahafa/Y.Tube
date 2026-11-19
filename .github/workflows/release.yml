@@ -43,19 +43,19 @@ jobs:
       - name: Build and verify signed APK
         shell: bash
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.YTUBE_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.YTUBE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.YTUBE_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.YTUBE_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.FREETUBE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.FREETUBE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.FREETUBE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.FREETUBE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${ANDROID_KEYSTORE_BASE64:?Missing YTUBE_KEYSTORE_BASE64 secret}"
-          : "${KEYSTORE_PASSWORD:?Missing YTUBE_KEYSTORE_PASSWORD secret}"
-          : "${KEY_ALIAS:?Missing YTUBE_KEY_ALIAS secret}"
-          : "${KEY_PASSWORD:?Missing YTUBE_KEY_PASSWORD secret}"
+          : "${ANDROID_KEYSTORE_BASE64:?Missing FREETUBE_KEYSTORE_BASE64 secret}"
+          : "${KEYSTORE_PASSWORD:?Missing FREETUBE_KEYSTORE_PASSWORD secret}"
+          : "${KEY_ALIAS:?Missing FREETUBE_KEY_ALIAS secret}"
+          : "${KEY_PASSWORD:?Missing FREETUBE_KEY_PASSWORD secret}"
 
           umask 077
-          export ANDROID_RELEASE_KEYSTORE="$(mktemp "$RUNNER_TEMP/y-tube-release.XXXXXX")"
+          export ANDROID_RELEASE_KEYSTORE="$(mktemp "$RUNNER_TEMP/freetube-release.XXXXXX")"
           trap 'rm -f "$ANDROID_RELEASE_KEYSTORE"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_RELEASE_KEYSTORE"
           unset ANDROID_KEYSTORE_BASE64
@@ -82,7 +82,7 @@ jobs:
           fi
 
           echo "Comparing APK certificate with the supplied JKS certificate"
-          cert_file="$(mktemp "$RUNNER_TEMP/y-tube-cert.XXXXXX")"
+          cert_file="$(mktemp "$RUNNER_TEMP/freetube-cert.XXXXXX")"
           trap 'rm -f "$ANDROID_RELEASE_KEYSTORE" "$cert_file"' EXIT
           "$JAVA_HOME/bin/keytool" -exportcert -keystore "$ANDROID_RELEASE_KEYSTORE" -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASSWORD" -file "$cert_file" >/dev/null 2>&1 || { echo "::error::Could not export certificate from supplied JKS (check alias and store password)"; exit 1; }
           keystore_cert="$(sha256sum "$cert_file" | cut -d ' ' -f1 | tr '[:upper:]' '[:lower:]')"
@@ -95,19 +95,19 @@ jobs:
           ! grep -q '^application-debuggable' <<< "$manifest"
           badging="$(sed -n '1p' <<< "$manifest")"
           version="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
-          [[ "$badging" == "package: name='com.tensei.ytxtube'"* ]]
+          [[ "$badging" == "package: name='com.tensei.freetube'"* ]]
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             [[ "$GITHUB_REF_NAME" == "v$version" ]]
           fi
 
           mkdir -p release
-          cp "$apk" "release/Y.Tube-v$version.apk"
+          cp "$apk" "release/freetube-v$version.apk"
           printf '%s\n' "$badging" "$certificates" "Verified signing certificate matches supplied release keystore." > release/verification.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Y.Tube-release
+          name: freetube-release
           path: release/
           if-no-files-found: error
 
@@ -122,7 +122,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: Y.Tube-release
+          name: freetube-release
           path: release
 
       - name: Publish verified APK
@@ -132,7 +132,7 @@ jobs:
           set -euo pipefail
           version="$(grep -m1 'versionName = ' app/build.gradle.kts | cut -d '"' -f2)"
           tag="v$version"
-          apk="Y.Tube-$tag.apk"
+          apk="freetube-$tag.apk"
           notes="docs/releases/$tag.md"
           release_notes=(--generate-notes)
           if [[ -f "$notes" ]]; then
@@ -144,7 +144,7 @@ jobs:
           else
             gh release create "$tag" "release/$apk" \
               --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
-              --title "Y.Tube $version" "${release_notes[@]}"
+              --title "freetube $version" "${release_notes[@]}"
           fi
 
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$apk" --dir downloaded

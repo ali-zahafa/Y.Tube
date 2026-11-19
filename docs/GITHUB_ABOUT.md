@@ -1,15 +1,15 @@
-# GitHub "About" settings for Y.tube
+# GitHub "About" settings for freetube
 
 Paste these into the repository's **About** box (⚙️ next to "About" on the repository home page). They cannot be changed through a commit.
 
 ## Repository name
 
-`Y.tube`
+`freetube`
 
 ## Description (GitHub allows up to 350 characters)
 
 ```
-Y.tube – free open-source YouTube alternative for Android: no ads, background play, fast video & audio downloads, Shorts, live streams, YouTube Music, Android TV. | بديل يوتيوب مجاني: بدون إعلانات، تشغيل في الخلفية، تحميل فيديو وصوت، شورتس، بث مباشر
+freetube – free open-source YouTube alternative for Android: no ads, background play, fast video & audio downloads, Shorts, live streams, YouTube Music, Android TV. | بديل يوتيوب مجاني: بدون إعلانات، تشغيل في الخلفية، تحميل فيديو وصوت، شورتس، بث مباشر
 ```
 
 ## Topics (GitHub allows up to 20; lowercase, hyphens only)

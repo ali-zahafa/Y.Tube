@@ -1,0 +1,102 @@
+package com.tensei.freetube
+
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
+object PlayerControlSettings {
+    private const val KEY_ENABLED = "show_quick_speed_quality"
+    private var prefs: SharedPreferences? = null
+
+    var showQuickControls by mutableStateOf(true)
+        private set
+
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
+        showQuickControls = prefs?.getBoolean(KEY_ENABLED, true) ?: true
+    }
+
+    fun set(on: Boolean) {
+        showQuickControls = on
+        prefs?.edit()?.putBoolean(KEY_ENABLED, on)?.apply()
+    }
+}
+
+/**
+ * Background playback: when on (the default, and the app's previous behaviour) audio keeps
+ * playing while the app is minimized, the screen is locked or another app is in front, and
+ * survives swiping the app away from Recents while it is playing. When off, playback pauses
+ * as soon as the app leaves the foreground (PiP still counts as foreground).
+ */
+object BackgroundPlaybackSettings {
+    private const val KEY_ENABLED = "background_playback_enabled"
+    private var prefs: SharedPreferences? = null
+
+    var enabled by mutableStateOf(true)
+        private set
+
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
+        enabled = prefs?.getBoolean(KEY_ENABLED, true) ?: true
+    }
+
+    fun set(on: Boolean) {
+        enabled = on
+        prefs?.edit()?.putBoolean(KEY_ENABLED, on)?.apply()
+    }
+}
+
+/**
+ * "Play in background" from the video details screen: audio-only background playback for one
+ * video. Deliberately not persisted and never written to [BackgroundPlaybackSettings] or
+ * [AudioOnly]; it only applies while that video is the one playing. Read by the UI and by
+ * PlaybackService (same process).
+ */
+object BackgroundAudioOverride {
+    @Volatile
+    var videoId: String? = null
+}
+
+/** Lets the playback service close the visible app after the notification's close button. */
+object AppExit {
+    @Volatile
+    var onExit: (() -> Unit)? = null
+}
+
+object PipSettings {
+    private const val KEY_ENABLED = "app_pip_enabled"
+    private var prefs: SharedPreferences? = null
+
+    var enabled by mutableStateOf(true)
+        private set
+
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
+        enabled = prefs?.getBoolean(KEY_ENABLED, true) ?: true
+    }
+
+    fun set(on: Boolean) {
+        enabled = on
+        prefs?.edit()?.putBoolean(KEY_ENABLED, on)?.apply()
+    }
+}
+
+object MiniPlayerSettings {
+    private const val KEY_USE_LIQUID = "use_liquid_mini_player"
+    private var prefs: SharedPreferences? = null
+
+    var useLiquidMiniPlayer by mutableStateOf(false)
+        private set
+
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
+        useLiquidMiniPlayer = prefs?.getBoolean(KEY_USE_LIQUID, false) ?: false
+    }
+
+    fun set(on: Boolean) {
+        useLiquidMiniPlayer = on
+        prefs?.edit()?.putBoolean(KEY_USE_LIQUID, on)?.apply()
+    }
+}

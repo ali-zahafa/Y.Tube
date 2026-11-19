@@ -4,18 +4,21 @@ plugins {
 }
 
 android {
-    namespace = "com.tensei.ytxtube"
+    namespace = "com.tensei.freetube"
     compileSdk {
         version = release(37) { minorApiLevel = 0 }
     }
 
     defaultConfig {
-        applicationId = "com.tensei.ytxtube"
+        applicationId = "com.tensei.freetube"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 252
-        versionName = "2.5.2"
+        targetSdk = 36
+        val repository = providers.environmentVariable("GITHUB_REPOSITORY").orNull.orEmpty()
+        require(repository.isEmpty() || Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+").matches(repository))
+        buildConfigField("String", "REPOSITORY", "\"$repository\"")
+        versionCode = 260
+        versionName = "2.6.0"
     }
 
     val releaseKeystore = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE").orNull
@@ -147,7 +150,7 @@ dependencies {
     implementation("androidx.media3:media3-session:$media3")
     implementation("androidx.media3:media3-ui-compose:$media3")
 
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.27.1")
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.google.guava:guava:33.3.1-android")
