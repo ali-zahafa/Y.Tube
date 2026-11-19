@@ -1,8 +1,8 @@
 <div align="center">
 
-# Y.tube
+# freetube
 
-<img src="docs/icon.png" width="180" alt="Y.Tube blue play icon with a cyan orbit" />
+<img src="docs/icon.png" width="180" alt="freetube icon" />
 
 ### Free, open-source YouTube alternative for Android
 ### بديل يوتيوب مجاني ومفتوح المصدر لأندرويد
@@ -26,7 +26,7 @@
 
 ## English
 
-**Y.tube** is a free, open-source **YouTube alternative** and streaming app for Android. Watch YouTube videos, Shorts and live streams **without ads**, keep listening **in the background** with the screen off, and **download** videos and audio at full speed — no Google account required. It also works as a lightweight **YouTube Music** player and runs on phones, tablets and **Android TV**.
+**freetube** is a free, open-source **YouTube alternative** and streaming app for Android. Watch YouTube videos, Shorts and live streams **without ads**, keep listening **in the background** with the screen off, and **download** videos and audio at full speed — no Google account required. It also works as a lightweight **YouTube Music** player and runs on phones, tablets and **Android TV**.
 
 Built with Kotlin, Jetpack Compose and AndroidX Media3 (ExoPlayer).
 
@@ -67,7 +67,7 @@ Built with Kotlin, Jetpack Compose and AndroidX Media3 (ExoPlayer).
 
 ### 📥 Download
 
-APKs are built automatically by GitHub Actions on every change: **Actions → Android CI → latest run → Artifacts → `YTXTube-debug-apk`**. Unzip it, install `app-debug.apk`, and allow installs from unknown sources if asked.
+APKs are built automatically by GitHub Actions on every change: **Actions → Android CI → latest run → Artifacts → `freetube-debug-apk`**. Unzip it, install `app-debug.apk`, and allow installs from unknown sources if asked.
 
 ### 🛠️ Build from source
 
@@ -86,7 +86,7 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk` (JDK 21 and th
 
 ## العربية
 
-**Y.tube** تطبيق مجاني ومفتوح المصدر، **بديل لتطبيق يوتيوب** على أندرويد. اتفرّج على فيديوهات يوتيوب والشورتس والبث المباشر **من غير إعلانات**، وكمّل سماع **في الخلفية** والشاشة مقفولة، و**حمّل** الفيديوهات والصوت بأقصى سرعة — من غير ما تحتاج حساب جوجل. وكمان بيشتغل كمشغّل **يوتيوب ميوزك** خفيف، وعلى الموبايل والتابلت و**Android TV**.
+**freetube** تطبيق مجاني ومفتوح المصدر، **بديل لتطبيق يوتيوب** على أندرويد. اتفرّج على فيديوهات يوتيوب والشورتس والبث المباشر **من غير إعلانات**، وكمّل سماع **في الخلفية** والشاشة مقفولة، و**حمّل** الفيديوهات والصوت بأقصى سرعة — من غير ما تحتاج حساب جوجل. وكمان بيشتغل كمشغّل **يوتيوب ميوزك** خفيف، وعلى الموبايل والتابلت و**Android TV**.
 
 مبني بـ Kotlin و Jetpack Compose ومشغّل AndroidX Media3 (ExoPlayer).
 
@@ -125,7 +125,7 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk` (JDK 21 and th
 
 ### 📥 التحميل
 
-ملفات APK بتتبني تلقائياً على GitHub Actions مع كل تعديل: **Actions ← Android CI ← آخر تشغيل ← Artifacts ← `YTXTube-debug-apk`**. فك الضغط وثبّت `app-debug.apk`، ولو طلب منك اسمح بالتثبيت من مصادر غير معروفة.
+ملفات APK بتتبني تلقائياً على GitHub Actions مع كل تعديل: **Actions ← Android CI ← آخر تشغيل ← Artifacts ← `freetube-debug-apk`**. فك الضغط وثبّت `app-debug.apk`، ولو طلب منك اسمح بالتثبيت من مصادر غير معروفة.
 
 </div>
 
@@ -148,17 +148,17 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk` (JDK 21 and th
 
 ## Disclaimer / إخلاء مسؤولية
 
-Y.tube is an independent open-source project and is **not affiliated with, endorsed by, or sponsored by Google LLC or YouTube**. "YouTube" is a trademark of Google LLC and is used here only to describe what the app works with. Content is streamed directly from YouTube for personal use. Provided "as is" under GPL-3.0 without warranty; users are responsible for complying with YouTube's Terms of Service and applicable copyright laws.
+freetube is an independent open-source project and is **not affiliated with, endorsed by, or sponsored by Google LLC or YouTube**. "YouTube" is a trademark of Google LLC and is used here only to describe what the app works with. Content is streamed directly from YouTube for personal use. Provided "as is" under GPL-3.0 without warranty; users are responsible for complying with YouTube's Terms of Service and applicable copyright laws.
 
 <div dir="rtl">
 
-Y.tube مشروع مستقل مفتوح المصدر، و**مالوش أي علاقة بشركة Google أو YouTube** ولا معتمد منهم. اسم "YouTube" علامة تجارية لشركة Google، ومذكور هنا بس لتوضيح الخدمة اللي التطبيق بيشتغل معاها. المحتوى بيتشغّل مباشرة من يوتيوب للاستخدام الشخصي، والمشروع مقدّم "كما هو" بترخيص GPL-3.0 من غير أي ضمان، والمستخدم مسؤول عن الالتزام بشروط استخدام يوتيوب وقوانين حقوق النشر.
+freetube مشروع مستقل مفتوح المصدر، و**مالوش أي علاقة بشركة Google أو YouTube** ولا معتمد منهم. اسم "YouTube" علامة تجارية لشركة Google، ومذكور هنا بس لتوضيح الخدمة اللي التطبيق بيشتغل معاها. المحتوى بيتشغّل مباشرة من يوتيوب للاستخدام الشخصي، والمشروع مقدّم "كما هو" بترخيص GPL-3.0 من غير أي ضمان، والمستخدم مسؤول عن الالتزام بشروط استخدام يوتيوب وقوانين حقوق النشر.
 
 </div>
 
 ## Credits / الشكر
 
-- Based on the open-source YTXTube project by Koustubh12345 (GPL-3.0). / مبني على مشروع YTXTube مفتوح المصدر (ترخيص GPL-3.0).
+- Based on the open-source freetube project by Koustubh12345 (GPL-3.0). / مبني على مشروع freetube مفتوح المصدر (ترخيص GPL-3.0).
 - Some ideas and techniques adapted from FlashTube.
 - Stream extraction by [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor); playback by [AndroidX Media3](https://github.com/androidx/media).
 
