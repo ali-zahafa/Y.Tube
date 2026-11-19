@@ -1,12 +1,14 @@
 name: Publish tested freetube v2.6.0 APK
 on:
-  push:
-    branches: [publish/freetube-v2.6.0]
+  pull_request:
+    types: [opened]
+    branches: [main]
 permissions:
   actions: read
   contents: write
 jobs:
   publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'publish/freetube-v2.6.0'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
