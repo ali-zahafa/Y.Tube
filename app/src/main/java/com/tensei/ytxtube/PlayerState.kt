@@ -207,9 +207,9 @@ class PlayerState(private val scope: CoroutineScope) {
     var captionText by mutableStateOf<String?>(null)
         private set
 
-    private var likeOverrides by mutableStateOf>(emptyMap())
-    private var likeDeltas by mutableStateOf>(emptyMap())
-    private var dislikeDeltas by mutableStateOf>(emptyMap())
+    private var likeOverrides by mutableStateOf<Map<String, LikeStatus>>(emptyMap())
+    private var likeDeltas by mutableStateOf<Map<String, Long>>(emptyMap())
+    private var dislikeDeltas by mutableStateOf<Map<String, Long>>(emptyMap())
 
     val currentLike: LikeStatus
         get() = current?.id?.let { likeOverrides[it] } ?: accountState?.like ?: LikeStatus.None
@@ -787,7 +787,7 @@ class PlayerState(private val scope: CoroutineScope) {
     var translationBusy by mutableStateOf(false)
         private set
     private var translationJob: Job? = null
-    private var translatedLines by mutableStateOf>(emptyMap())
+    private var translatedLines by mutableStateOf<Map<String, String>>(emptyMap())
 
     fun setDualCaptions(enabled: Boolean, target: String = dualTargetLanguage) {
         dualCaptionsEnabled = enabled
