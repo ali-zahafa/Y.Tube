@@ -1,0 +1,35 @@
+name: Publish tested freetube v2.6.0 APK
+on:
+  pull_request:
+    types: [opened]
+    branches: [main]
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'publish/freetube-v2.6.0'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify APK, publish release and verify download
+        run: |
+          set -euo pipefail
+          apk=freetube-v2.6.0-debug.apk
+          digest=3a0dd4cc56caa1b625254a2fa188453a6aa2ab604f97bd2bf895056f3a761163
+          gh run download 44472542928 --repo "$GH_REPO" --name freetube-debug-apk --dir artifact
+          mv artifact/app-debug.apk "$apk"
+          echo "$digest  $apk" | sha256sum -c -
+          cat > notes.md <<'NOTES'
+          Android Debug APK · Version 2.6.0 · Package `com.tensei.freetube.preview`
+
+          Background playback and notification controls, dual subtitles with Arabic translation, downloads and channel Shorts. The owner tested this APK on a phone. All 77 unit tests and the WebView background test passed. The three native playback tests on CI could not resolve the YouTube host.
+
+          نسخة Debug لأندرويد. تشمل التشغيل في الخلفية والتحكم من الإشعار والترجمة المزدوجة والعربية والتنزيلات وشورتس القنوات. جرّب صاحب المشروع النسخة على موبايله. نجحت اختبارات الوحدة واختبار مشغّل الويب في الخلفية، وتعذّر على المحاكي الاتصال بيوتيوب في اختبارات المشغّل الأساسي الثلاثة.
+          NOTES
+          gh release create v2.6.0 "$apk" --repo "$GH_REPO" --target 323fae092831fef241d37c5c923d8bd6f5aaa341 --title 'freetube v2.6.0' --notes-file notes.md --latest
+          test "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = v2.6.0
+          gh release download v2.6.0 --repo "$GH_REPO" --pattern "$apk" --dir published
+          echo "$digest  published/$apk" | sha256sum -c -
