@@ -106,6 +106,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim ${{ steps.resolver.outputs.option }}
           disable-animations: true
           script: |
+            adb shell ping -c 1 -W 2 www.youtube.com 2>&1 | tee /tmp/yt-emulator-network.log
+            if grep -qi 'unknown host' /tmp/yt-emulator-network.log; then adb shell svc data enable && adb shell svc wifi disable && sleep 5; fi
             adb shell ping -c 1 -W 2 www.youtube.com || true
             ./gradlew :app:connectedDebugAndroidTest --stacktrace
       - name: Upload device test reports
