@@ -81,18 +81,23 @@ object PlayerFallback {
     fun forceClientFallback(videoId: String, clientIndex: Int = 0): Boolean {
         val token = cacheGenerations.snapshot(videoId)
         val clients = fallbackClients()
+        val failures = ArrayList<String>()
         for (index in clientIndex.coerceIn(0, clients.lastIndex)..clients.lastIndex) {
             val cfg = clients[index]
-            val result = runCatching { askWithMeta(videoId, cfg) }.getOrNull() ?: continue
+            val result = attempt(videoId, cfg, failures) ?: continue
             val (answer, meta) = result
             if (!isPlayable(answer)) continue
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
                 cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
                 sourceMetadata[videoId] = meta
                 forcedClients.add(videoId)
+                failureReasons.remove(videoId)
             }
             if (published) return true
             return false
+        }
+        cacheGenerations.publishIfCurrent(videoId, token) {
+            failureReasons[videoId] = failures.joinToString(" | ")
         }
         return false
     }
@@ -131,20 +136,40 @@ object PlayerFallback {
 
     private fun fetchFallback(videoId: String): JSONObject? {
         val token = cacheGenerations.snapshot(videoId)
+        val failures = ArrayList<String>()
         for (cfg in fallbackClients()) {
-            val result = runCatching { askWithMeta(videoId, cfg) }
-                .onFailure { Log.w(TAG, "Fallback ${cfg.name} failed: ${it.javaClass.simpleName}") }
-                .getOrNull() ?: continue
+            val result = attempt(videoId, cfg, failures) ?: continue
             val (answer, meta) = result
             if (!isPlayable(answer)) continue
             val published = cacheGenerations.publishIfCurrent(videoId, token) {
                 cache[videoId] = Cached(System.currentTimeMillis(), answer, meta)
                 sourceMetadata[videoId] = meta
+                failureReasons.remove(videoId)
             }
             if (published) return answer
             return null
         }
+        cacheGenerations.publishIfCurrent(videoId, token) {
+            failureReasons[videoId] = failures.joinToString(" | ")
+        }
         return null
+    }
+
+    private fun attempt(
+        videoId: String,
+        cfg: ClientConfig,
+        failures: MutableList<String>,
+    ): Pair<JSONObject, SourceMetadata>? {
+        var failure: String? = null
+        val result = runCatching { askWithMeta(videoId, cfg) { failure = it } }
+            .onFailure { if (failure == null) failure = "EXCEPTION(${it.javaClass.simpleName})" }
+            .getOrNull()
+        failure?.let {
+            val diagnostic = "${cfg.name}:$it"
+            failures.add(diagnostic)
+            Log.w(TAG, diagnostic)
+        }
+        return result
     }
 
     private fun fallbackClients(): List<ClientConfig> = listOf(
@@ -234,7 +259,30 @@ object PlayerFallback {
             ("a bot" in lower || "not a bot" in lower || "confirm you" in lower || "error" in lower)
     }
 
-    private fun askWithMeta(videoId: String, cfg: ClientConfig): Pair<JSONObject, SourceMetadata> {
+    internal fun playabilityFailure(status: String, reason: String): String {
+        if (status.equals("OK", ignoreCase = true)) return "NO_PLAYABLE_STREAMS"
+        val code = when (status.uppercase()) {
+            "LOGIN_REQUIRED", "UNPLAYABLE", "ERROR", "AGE_VERIFICATION_REQUIRED",
+            "CONTENT_CHECK_REQUIRED", "LIVE_STREAM_OFFLINE" -> status.uppercase()
+            else -> "UNKNOWN_STATUS"
+        }
+        // External error text can include URLs or credentials. Emit only known reason labels.
+        val safeReason = when {
+            reason.contains("not a bot", ignoreCase = true) -> "BOT_CHECK (Sign in to confirm you’re not a bot)"
+            reason.contains("age", ignoreCase = true) && code == "AGE_VERIFICATION_REQUIRED" -> "AGE_CHECK"
+            reason.contains("private video", ignoreCase = true) -> "PRIVATE_VIDEO"
+            reason.contains("video unavailable", ignoreCase = true) -> "VIDEO_UNAVAILABLE"
+            reason.isNotBlank() -> "UNRECOGNIZED_REASON"
+            else -> null
+        }
+        return if (safeReason == null) code else "$code ($safeReason)"
+    }
+
+    private fun askWithMeta(
+        videoId: String,
+        cfg: ClientConfig,
+        recordFailure: (String) -> Unit,
+    ): Pair<JSONObject, SourceMetadata> {
         val client = JSONObject()
             .put("clientName", cfg.name)
             .put("clientVersion", cfg.version)
@@ -294,35 +342,21 @@ object PlayerFallback {
             }
             .build()
 
-        return try {
-            Net.client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    failureReasons[videoId] = "${cfg.name}:HTTP_${response.code}"
-                    error("HTTP ${response.code}")
-                }
-                val answer = JSONObject(response.body!!.string())
-                val status = answer.optJSONObject("playabilityStatus")?.optString("status") ?: "UNKNOWN"
-
-                if (!isPlayable(answer)) {
-                    val reason = answer.optJSONObject("playabilityStatus")?.optString("reason").orEmpty()
-                    if (status.equals("OK", ignoreCase = true)) {
-                        failureReasons[videoId] = "${cfg.name}:NO_PLAYABLE_STREAMS"
-                    } else {
-                        val tokenMsg = if (missingToken) "[NO_TOKEN] " else ""
-                        failureReasons[videoId] = "${cfg.name}:$tokenMsg$status${if (reason.isNotBlank()) "($reason)" else ""}"
-                    }
-                } else {
-                    failureReasons.remove(videoId)
-                }
-                val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, visitorData, !poToken.isNullOrBlank())
-                answer to meta
+        val tokenPrefix = if (missingToken) "[NO_TOKEN] " else ""
+        return Net.client.newCall(request).execute().use { response ->
+            val http = "HTTP_${response.code}"
+            if (!response.isSuccessful) {
+                recordFailure("$tokenPrefix$http")
+                error("HTTP ${response.code}")
             }
-        } catch (error: Throwable) {
-            if (failureReasons[videoId].isNullOrBlank()) {
-                val detail = error.message?.replace(Regex("\\s+"), " ")?.take(160).orEmpty()
-                failureReasons[videoId] = "${cfg.name}:EXCEPTION($detail)"
+            val answer = JSONObject(response.body!!.string())
+            if (!isPlayable(answer)) {
+                val status = answer.optJSONObject("playabilityStatus")
+                val failure = playabilityFailure(status?.optString("status").orEmpty(), status?.optString("reason").orEmpty())
+                recordFailure("$tokenPrefix$http $failure")
             }
-            throw error
+            val meta = SourceMetadata(cfg.name, cfg.version, cfg.userAgent, visitorData, !poToken.isNullOrBlank())
+            answer to meta
         }
     }
 }

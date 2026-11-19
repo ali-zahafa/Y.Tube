@@ -1,5 +1,6 @@
 package com.tensei.ytxtube
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,6 +37,20 @@ class PlayerFallbackTest {
     @Test
     fun loginRequiredStillUsesFallback() {
         assertTrue(PlayerFallback.isBlocked("""{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}"""))
+    }
+
+    @Test
+    fun playabilityDiagnosticsDoNotExposeExternalResponseText() {
+        val secret = "https://example.test/video?sig=private"
+        assertEquals(
+            "LOGIN_REQUIRED (BOT_CHECK (Sign in to confirm you’re not a bot))",
+            PlayerFallback.playabilityFailure("LOGIN_REQUIRED", "Sign in to confirm you’re not a bot. $secret"),
+        )
+        assertEquals(
+            "UNKNOWN_STATUS (UNRECOGNIZED_REASON)",
+            PlayerFallback.playabilityFailure(secret, secret),
+        )
+        assertEquals("NO_PLAYABLE_STREAMS", PlayerFallback.playabilityFailure("OK", secret))
     }
 
     private fun ok(streamingData: String): String =
