@@ -251,7 +251,7 @@ internal fun startWebBackground(
     onStarted: () -> Unit,
     onError: (String) -> Unit,
 ) {
-    view.evaluateJavascript("(function(){const v=document.querySelector('video'); return !!v && !v.paused && !v.ended && v.readyState >= 2;})()") { result ->
+    view.evaluateJavascript("(function(){const v=$WEB_MEDIA_ELEMENT; return !!v && !v.paused && !v.ended;})()") { result ->
         if (result != "true") {
             onError("Start the video on the page first, then tap Background playback.")
         } else if (WebPlaybackSession.view !== view) {

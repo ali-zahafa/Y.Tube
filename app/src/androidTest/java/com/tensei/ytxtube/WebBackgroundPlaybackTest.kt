@@ -63,7 +63,7 @@ class WebBackgroundPlaybackTest {
                 WebPlaybackSession.attached = true
                 activity.addContentView(view, ViewGroup.LayoutParams(-1, -1))
                 view.loadDataWithBaseURL("https://m.youtube.com/", """
-                    <html><body><video id="v" controls src="data:audio/wav;base64,$wav"></video></body></html>
+                    <html><body><video id="preview" muted></video><video id="v" controls src="data:audio/wav;base64,$wav"></video></body></html>
                 """.trimIndent(), "text/html", "UTF-8", null)
             }
             assertTrue("Fixture page did not load", loaded.await(15, TimeUnit.SECONDS))
@@ -76,9 +76,9 @@ class WebBackgroundPlaybackTest {
             assertTrue(rejected.await(10, TimeUnit.SECONDS))
             main { assertFalse(WebPlaybackSession.background) }
 
-            js(view, "document.querySelector('video').play().catch(e => window.fixtureError=String(e));")
+            js(view, "document.getElementById('v').play().catch(e => window.fixtureError=String(e));")
             await("Fixture did not start: ${js(view, "window.fixtureError || ''")}") {
-                js(view, "!document.querySelector('video').paused && document.querySelector('video').currentTime > 0") == "true"
+                js(view, "!document.getElementById('v').paused && document.getElementById('v').currentTime > 0") == "true"
             }
             val started = CountDownLatch(1)
             var error: String? = null
@@ -99,12 +99,12 @@ class WebBackgroundPlaybackTest {
             shell("input keyevent KEYCODE_SLEEP")
             // Require real media progress past the reported 59-second boundary, screen off.
             await("Web media stopped before 60 seconds with screen off", 80) {
-                js(view, "document.querySelector('video').currentTime > 62 && !document.querySelector('video').paused") == "true"
+                js(view, "document.getElementById('v').currentTime > 62 && !document.getElementById('v').paused") == "true"
             }
             main { view.context.startService(Intent(view.context, WebPlaybackService::class.java).setAction("pause")) }
-            await("Notification Pause did not pause media") { js(view, "document.querySelector('video').paused") == "true" }
+            await("Notification Pause did not pause media") { js(view, "document.getElementById('v').paused") == "true" }
             main { view.context.startService(Intent(view.context, WebPlaybackService::class.java).setAction("play")) }
-            await("Notification Play did not resume media") { js(view, "!document.querySelector('video').paused") == "true" }
+            await("Notification Play did not resume media") { js(view, "!document.getElementById('v').paused") == "true" }
             main { view.context.startService(Intent(view.context, WebPlaybackService::class.java).setAction("stop")) }
             await("Notification Stop did not release the web session") {
                 var stopped = false

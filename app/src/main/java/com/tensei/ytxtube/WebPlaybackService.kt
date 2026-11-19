@@ -12,6 +12,16 @@ import android.webkit.WebView
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 
+// YouTube can keep a paused preview before the active watch video in the DOM.
+internal const val WEB_MEDIA_ELEMENT = """(function () {
+    const media = Array.from(document.querySelectorAll('video, audio'));
+    const active = media.find(v => !v.paused && !v.ended);
+    if (active) window.__ytubeSessionMedia = active;
+    const retained = window.__ytubeSessionMedia;
+    return active || (retained && retained.isConnected && retained) ||
+        document.querySelector('#movie_player video') || media[0];
+})()"""
+
 /** The same WebView stays alive when its Compose dialog goes away. All access is on main. */
 internal object WebPlaybackSession {
     var view: WebView? = null
@@ -59,7 +69,7 @@ class WebPlaybackService : Service() {
         override fun run() {
             if (!WebPlaybackSession.background) { stopSelf(); return }
             WebPlaybackSession.view?.evaluateJavascript(
-                "(function(){const v=document.querySelector('video'); return v ? (v.ended ? 'ended' : (!v.paused ? 'playing' : 'paused')) : 'missing';})()"
+                "(function(){const v=$WEB_MEDIA_ELEMENT; return v ? (v.ended ? 'ended' : (!v.paused ? 'playing' : 'paused')) : 'missing';})()"
             ) { result ->
                 if (WebPlaybackSession.service !== this@WebPlaybackService) return@evaluateJavascript
                 if (result == "\"ended\"" || result == "\"missing\"") {
@@ -129,8 +139,8 @@ class WebPlaybackService : Service() {
         // Chromium's media engine owns audio focus; a second native request would
         // steal focus from our own WebView and pause it.
         WebPlaybackSession.view?.evaluateJavascript(
-            if (play) "document.querySelectorAll('video').forEach(v => { v.play().catch(() => {}); });"
-            else "document.querySelectorAll('video').forEach(v => v.pause());", null)
+            if (play) "(function(){const v=$WEB_MEDIA_ELEMENT; if(v) v.play().catch(() => {});})()"
+            else "(function(){const v=$WEB_MEDIA_ELEMENT; if(v) v.pause();})()", null)
     }
 
     @Suppress("DEPRECATION")

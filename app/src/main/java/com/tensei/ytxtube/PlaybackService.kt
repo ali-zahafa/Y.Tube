@@ -908,9 +908,20 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         if (mediaItem.localConfiguration?.uri?.scheme == "file") {
             return fallback.createMediaSource(mediaItem)
         }
+        val route = StreamRecovery.routeFor(mediaItem.mediaId)
         PlayerFallback.directStreams(mediaItem.mediaId)?.let { direct ->
             val hls = direct.hlsUrl
             val dash = direct.dashManifestUrl
+            // Honor the route chosen by recovery before applying the default preference.
+            if (route == StreamRecovery.Route.Muxed && direct.muxedUrl != null) {
+                return directSource(direct.muxedUrl, mediaItem)
+            }
+            if (route == StreamRecovery.Route.Dash && !dash.isNullOrBlank()) {
+                return dashFactory().createMediaSource(mediaItem.buildUpon().setUri(dash).build())
+            }
+            if (route == StreamRecovery.Route.DirectProgressive && direct.videoUrl != null && direct.audioUrl != null) {
+                return MergingMediaSource(true, true, directSource(direct.videoUrl, mediaItem), directSource(direct.audioUrl, mediaItem))
+            }
             if (!hls.isNullOrBlank()) {
                 return hlsFactory().createMediaSource(mediaItem.buildUpon().setUri(hls).build())
             }
@@ -930,7 +941,6 @@ private class YouTubeMediaSourceFactory(context: Context, cache: SimpleCache?) :
         val info = StreamCache.get(mediaItem.mediaId) ?: return fallback.createMediaSource(mediaItem)
         val isLive = info.streamType == org.schabi.newpipe.extractor.stream.StreamType.LIVE_STREAM
         val hlsUrl = info.hlsUrl?.ifBlank { null }
-        val route = StreamRecovery.routeFor(mediaItem.mediaId)
         if ((isLive || route == StreamRecovery.Route.Hls) && !hlsUrl.isNullOrBlank()) {
             Log.i("YTXTube", "media source ${mediaItem.mediaId}: playing HLS")
             return hlsFactory().createMediaSource(

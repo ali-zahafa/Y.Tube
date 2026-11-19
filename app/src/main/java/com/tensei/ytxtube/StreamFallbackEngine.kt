@@ -83,8 +83,13 @@ internal class StreamRecoverer(
         val item = player.currentMediaItem ?: return
         if (item.localConfiguration?.uri?.scheme == "file") return
         val id = item.mediaId
-        if (activeRecovery || attempt >= MAX_ATTEMPTS) return
+        if (activeRecovery) return
         if (id != lastId) { lastId = id; attempt = 0 }
+
+        if (attempt >= MAX_ATTEMPTS) {
+            StreamRecovery.failed = id to diagnosticMessage(id, status, attempt)
+            return
+        }
 
         val position = player.currentPosition.coerceAtLeast(0L)
         val shouldPlay = player.playWhenReady
