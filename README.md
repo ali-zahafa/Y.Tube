@@ -30,6 +30,13 @@
 
 Built with Kotlin, Jetpack Compose and AndroidX Media3 (ExoPlayer).
 
+### What's new in freetube 2.6.0
+
+- Play videos with ExoPlayer or switch to the web player. Continue listening with the screen off. From the media notification, go to the previous or next video, or seek back or forward by 10 seconds.
+- Read the original captions alongside an Arabic translation. Open a copied YouTube link in the app and return to videos from your watch history.
+- Find the newest videos and live streams first on channel pages. Swipe through multiple pages of a channel’s Shorts.
+- Save video and audio for offline playback. SponsorBlock can skip marked segments, and DeArrow can show community-provided titles and thumbnails where available.
+
 ### ✨ Features
 
 #### ▶️ Playback
@@ -89,6 +96,13 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk` (JDK 21 and th
 **freetube** تطبيق مجاني ومفتوح المصدر، **بديل لتطبيق يوتيوب** على أندرويد. اتفرّج على فيديوهات يوتيوب والشورتس والبث المباشر **من غير إعلانات**، وكمّل سماع **في الخلفية** والشاشة مقفولة، و**حمّل** الفيديوهات والصوت بأقصى سرعة — من غير ما تحتاج حساب جوجل. وكمان بيشتغل كمشغّل **يوتيوب ميوزك** خفيف، وعلى الموبايل والتابلت و**Android TV**.
 
 مبني بـ Kotlin و Jetpack Compose ومشغّل AndroidX Media3 (ExoPlayer).
+
+### الجديد في freetube 2.6.0
+
+- شغّل الفيديو بالمشغّل الأساسي أو انتقل لمشغّل الويب، وكمّل السماع والشاشة مقفولة. من إشعار التشغيل تقدر تفتح الفيديو السابق أو التالي، أو ترجع وتتقدّم ١٠ ثوانٍ.
+- اعرض الترجمة الأصلية والعربية مع بعض. افتح رابط يوتيوب بعد نسخه، وارجع للفيديوهات اللي شفتها من سجل المشاهدة.
+- شوف أحدث فيديوهات القناة وبثوثها الأول، واسحب بين صفحات الشورتس عشان توصل لمقاطع أقدم.
+- نزّل الفيديو أو الصوت للتشغيل من غير إنترنت. تقدر تتخطّى الفقرات المعلَّمة باستخدام SponsorBlock، وتشوف عناوين وصور مصغّرة بديلة من المجتمع عبر DeArrow لما تكون متاحة.
 
 ### ✨ المميزات
 

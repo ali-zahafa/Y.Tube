@@ -9,7 +9,7 @@ Paste these into the repository's **About** box (⚙️ next to "About" on the r
 ## Description (GitHub allows up to 350 characters)
 
 ```
-freetube – free open-source YouTube alternative for Android: no ads, background play, fast video & audio downloads, Shorts, live streams, YouTube Music, Android TV. | بديل يوتيوب مجاني: بدون إعلانات، تشغيل في الخلفية، تحميل فيديو وصوت، شورتس، بث مباشر
+freetube for Android and Android TV. Background playback, media controls, dual subtitles, Arabic translation, downloads and channel Shorts. | freetube لأندرويد وAndroid TV. تشغيل في الخلفية، تحكم من الإشعارات، ترجمة مزدوجة وعربية، تنزيل الفيديو والصوت وتصفّح شورتس القنوات.
 ```
 
 ## Topics (GitHub allows up to 20; lowercase, hyphens only)
