@@ -24,7 +24,11 @@ class TikTokNavigationTest {
     }
 
     @Test fun openTabTypeAndSearch() {
-        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val device = UiDevice.getInstance(instrumentation)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            device.executeShellCommand("pm grant ${instrumentation.targetContext.packageName} android.permission.POST_NOTIFICATIONS")
+        }
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             val tab = requireNotNull(device.wait(Until.findObject(By.text("TikTok")), 20000))
             tab.click()
