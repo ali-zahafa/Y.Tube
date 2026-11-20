@@ -28,7 +28,9 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     val arabic = LanguageSettings.effectiveLanguageCode() == "ar"
     fun label(en: String, ar: String) = if (arabic) ar else en
     var query by rememberSaveable { mutableStateOf("") }
-    var page by rememberSaveable { mutableStateOf("") }
+    var page by rememberSaveable { mutableStateOf("https://www.tiktok.com/") }
+    var loading by remember { mutableStateOf(true) }
+    var webError by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var source by rememberSaveable { mutableStateOf<String?>(null) }
@@ -112,6 +114,17 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean =
                 request.isForMainFrame && !TikTokGuest.allowed(request.url.toString())
+            override fun onPageStarted(v: WebView, url: String?, icon: android.graphics.Bitmap?) {
+                loading = true
+                webError = null
+            }
+            override fun onPageFinished(v: WebView, url: String?) { loading = false }
+            override fun onReceivedError(v: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                if (request.isForMainFrame) {
+                    loading = false
+                    webError = error.description.toString()
+                }
+            }
             override fun doUpdateVisitedHistory(v: WebView, url: String?, reload: Boolean) {
                 canGoBack = v.canGoBack()
                 if (url != null && TikTokGuest.allowed(url)) page = url
@@ -124,6 +137,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
             } else message = label("No supported video download offered.", "الصفحة لم تُتح تنزيل فيديو مدعوم.")
         }
         if (view.url == null && TikTokGuest.allowed(page)) view.loadUrl(page)
+        else loading = view.progress < 100
         onDispose {
             view.setDownloadListener(null)
             view.webViewClient = WebViewClient()
@@ -156,10 +170,12 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
             }
             TextButton(onClick = { pickVideo.launch(arrayOf("video/*")) }, enabled = !busy) { Text(label("Extract local audio", "استخراج صوت ملف")) }
         }
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        webError?.let { error ->
+            Text(label("Could not load TikTok", "تعذّر فتح تيك توك") + " ($error)", Modifier.padding(horizontal = 8.dp))
+            TextButton(onClick = { view.loadUrl(page) }) { Text(label("Retry", "حاول تاني")) }
+        }
+        if (busy || loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (message.isNotEmpty()) Text(message, Modifier.padding(horizontal = 8.dp))
-        if (page.isEmpty()) Text(label("Search a public profile or paste a video link.",
-            "ابحث عن حساب عام أو الصق رابط فيديو."), Modifier.padding(12.dp))
         AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().weight(1f))
         if (page.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { seek(-10) }) { Text("−10 s") }

@@ -705,14 +705,17 @@ fun FreeTubeApp() {
         Box(
             Modifier
                 .fillMaxSize()
-                .layerBackdrop(pageBackdrop)
+                .then(if (tab == Tab.TikTok) Modifier else Modifier.layerBackdrop(pageBackdrop))
                 .background(c.surface)
                 .graphicsLayer {
                     rotationY = appFlipRotation.value
                     cameraDistance = 16f
                 }
         ) {
-        AnimatedContent(
+        if (tab == Tab.TikTok) {
+            // Host the Android WebView directly, outside the animated page capture.
+            TikTokScreen(contentPadding, onBackground = { activity.moveTaskToBack(true) })
+        } else AnimatedContent(
             targetState = tab,
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -729,9 +732,7 @@ fun FreeTubeApp() {
             label = "tabs",
         ) { t ->
             when (t) {
-                Tab.TikTok -> TikTokScreen(contentPadding, onBackground = {
-                    activity.moveTaskToBack(true)
-                })
+                Tab.TikTok -> Unit
                 Tab.Home -> HomeScreen(
                     lib, contentPadding, onOpen = player::open, onSearch = { openSearch = true },
                     onSignIn = { signingIn = true }, onAccount = { openSettings = true },
