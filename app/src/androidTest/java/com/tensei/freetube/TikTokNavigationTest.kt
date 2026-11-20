@@ -46,11 +46,44 @@ class TikTokNavigationTest {
             while (!requested && android.os.SystemClock.elapsedRealtime() < until) {
                 scenario.onActivity {
                     val web = findPage(it.window.decorView)
-                    requested = listOf(web?.originalUrl, web?.url).any { url -> url?.contains("/search/user?q=Cooking") == true }
+                    requested = listOf(web?.originalUrl, web?.url).any { url -> url == TikTokGuest.destination("Cooking", false) }
                 }
                 if (!requested) Thread.sleep(150)
             }
             assertTrue("Search did not open the entered account query", requested)
+            var result: String? = null
+            val resultDeadline = android.os.SystemClock.elapsedRealtime() + 30000
+            while (result == null && android.os.SystemClock.elapsedRealtime() < resultDeadline) {
+                val done = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity {
+                    val web = requireNotNull(findPage(it.window.decorView))
+                    web.evaluateJavascript("JSON.stringify(Array.from(document.querySelectorAll('a.result__a'), a => a.href))") { json ->
+                        val raw = org.json.JSONTokener(json).nextValue() as? String
+                        val links = org.json.JSONArray(raw ?: "[]")
+                        for (i in 0 until links.length()) {
+                            val href = links.getString(i)
+                            if (TikTokGuest.navigation(href)?.let(TikTokGuest::allowed) == true) {
+                                result = href
+                                break
+                            }
+                        }
+                        done.countDown()
+                    }
+                }
+                assertTrue(done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                if (result == null) Thread.sleep(500)
+            }
+            val link = requireNotNull(result) { "Live search returned no public TikTok result for Cooking" }
+            scenario.onActivity {
+                findPage(it.window.decorView)?.evaluateJavascript("document.querySelectorAll('a.result__a').forEach(a => { if(a.href === " + org.json.JSONObject.quote(link) + ") a.click() })", null)
+            }
+            var onTikTok = false
+            val openDeadline = android.os.SystemClock.elapsedRealtime() + 15000
+            while (!onTikTok && android.os.SystemClock.elapsedRealtime() < openDeadline) {
+                scenario.onActivity { onTikTok = findPage(it.window.decorView)?.url?.let(TikTokGuest::allowed) == true }
+                if (!onTikTok) Thread.sleep(200)
+            }
+            assertTrue("Live result did not open on TikTok", onTikTok)
         }
     }
 }

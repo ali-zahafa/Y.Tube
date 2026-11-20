@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val arabic = LanguageSettings.effectiveLanguageCode() == "ar"
     fun label(en: String, ar: String) = if (arabic) ar else en
     var query by rememberSaveable { mutableStateOf("") }
@@ -112,13 +113,22 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     DisposableEffect(view) {
         if (WebPlaybackSession.view === view) WebPlaybackSession.attached = true
         view.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean =
-                request.isForMainFrame && !TikTokGuest.allowed(request.url.toString())
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                if (!request.isForMainFrame) return false
+                val raw = request.url.toString()
+                val target = TikTokGuest.navigation(raw) ?: return true
+                if (target == raw) return false
+                v.loadUrl(target)
+                return true
+            }
             override fun onPageStarted(v: WebView, url: String?, icon: android.graphics.Bitmap?) {
                 loading = true
                 webError = null
             }
-            override fun onPageFinished(v: WebView, url: String?) { loading = false }
+            override fun onPageFinished(v: WebView, url: String?) {
+                loading = false
+                if (url != null && TikTokGuest.allowed(url)) v.evaluateJavascript(TIKTOK_SEARCH_EVENTS, null)
+            }
             override fun onReceivedError(v: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 if (request.isForMainFrame) {
                     loading = false
@@ -127,7 +137,10 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
             }
             override fun doUpdateVisitedHistory(v: WebView, url: String?, reload: Boolean) {
                 canGoBack = v.canGoBack()
-                if (url != null && TikTokGuest.allowed(url)) page = url
+                if (url != null) TikTokGuest.navigation(url)?.let { target ->
+                    page = target
+                    if (target != url) v.post { if (v.url == url) v.loadUrl(target) }
+                }
             }
         }
         view.setDownloadListener { url, _, _, mime, _ ->
@@ -136,7 +149,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
                 chooseFormat = true
             } else message = label("No supported video download offered.", "الصفحة لم تُتح تنزيل فيديو مدعوم.")
         }
-        if (view.url == null && TikTokGuest.allowed(page)) view.loadUrl(page)
+        if (view.url == null && (TikTokGuest.allowed(page) || TikTokGuest.indexPage(page))) view.loadUrl(page)
         else loading = view.progress < 100
         onDispose {
             view.setDownloadListener(null)
@@ -150,7 +163,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     fun search(videos: Boolean) {
         val url = TikTokGuest.destination(query, videos)
         if (url == null) message = label("Enter a name or TikTok link.", "اكتب اسم أو رابط تيك توك.")
-        else { message = ""; page = url; view.loadUrl(url) }
+        else { keyboard?.hide(); message = ""; page = url; view.loadUrl(url) }
     }
     fun seek(seconds: Int) {
         view.evaluateJavascript("(function(){const v=$WEB_MEDIA_ELEMENT; if(!v || !Number.isFinite(v.duration)) return false; v.currentTime=Math.min(v.duration,Math.max(0,v.currentTime+$seconds));return true;})()") {
@@ -160,6 +173,9 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     BackHandler(enabled = canGoBack) { view.goBack() }
     Column(Modifier.fillMaxSize().padding(padding).statusBarsPadding()) {
         OutlinedTextField(query, { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { search(false) }),
+            supportingText = { Text(label("Public TikTok results via DuckDuckGo", "نتائج تيك توك العامة عبر DuckDuckGo")) },
             label = { Text(label("Name, @username or TikTok link", "اسم، يوزرنيم أو رابط تيك توك")) })
         Row(Modifier.horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { search(false) }) { Text(label("Accounts", "حسابات")) }
@@ -177,7 +193,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
         if (busy || loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (message.isNotEmpty()) Text(message, Modifier.padding(horizontal = 8.dp))
         AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().weight(1f))
-        if (page.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState())) {
+        if (TikTokGuest.allowed(page)) Row(Modifier.horizontalScroll(rememberScrollState())) {
             TextButton(onClick = { seek(-10) }) { Text("−10 s") }
             TextButton(onClick = { seek(10) }) { Text("+10 s") }
             TextButton(onClick = {
@@ -196,3 +212,25 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
         }
     }
 }
+
+// Some mobile suggestions are buttons handled by TikTok JavaScript, without an href.
+private const val TIKTOK_SEARCH_EVENTS = """(() => {
+    if (window.__freeTubeSearchEvents) return;
+    window.__freeTubeSearchEvents = true;
+    function search(text, event) {
+        if (!event.isTrusted || !text || !text.trim()) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        location.assign('/search?q=' + encodeURIComponent(text.trim()));
+    }
+    const input = 'input[type=search],input[name=q],input[type=text][role=combobox],input[data-e2e*=search],input[placeholder*=Search i],input[placeholder*=بحث]';
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.isComposing && e.target.matches?.(input)) search(e.target.value, e);
+    }, true);
+    document.addEventListener('click', e => {
+        const option = e.target.closest?.('[role=option],[data-e2e*=suggest-item],[data-e2e*=search-suggest],[data-e2e*=search-history-item]');
+        if (!option || !document.querySelector(input) || option.closest('a[href]')) return;
+        const text = option.innerText?.trim();
+        if (text && text.length <= 160 && !text.includes('\n')) search(text, e);
+    }, true);
+})()"""

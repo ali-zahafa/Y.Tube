@@ -32,7 +32,7 @@ class TikTokGuestDeviceTest {
                     }
                 }
                 activity.addContentView(view, ViewGroup.LayoutParams(-1, -1))
-                view.loadUrl(requireNotNull(TikTokGuest.destination("tiktok", false)))
+                view.loadUrl("https://www.tiktok.com/search/user?q=tiktok")
             }
             for (attempt in 1..25) {
                 val done = CountDownLatch(1)

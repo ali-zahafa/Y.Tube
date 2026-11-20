@@ -10,11 +10,17 @@ class TikTokGuestTest {
         for (query in listOf("تعليم الطبخ", "Cooking & baking")) {
             for (videos in listOf(true, false)) {
                 val url = requireNotNull(TikTokGuest.destination(query, videos))
-                val tab = if (videos) "video" else "user"
-                assertEquals("https://www.tiktok.com/search/$tab", url.substringBefore('?'))
-                assertEquals(query, URLDecoder.decode(url.substringAfter("?q="), "UTF-8"))
+                val scope = if (videos) "site:tiktok.com inurl:video" else "site:tiktok.com/@ -inurl:video"
+                assertEquals("https://html.duckduckgo.com/html/", url.substringBefore('?'))
+                assertEquals("$scope $query", URLDecoder.decode(url.substringAfter("?q="), "UTF-8"))
             }
         }
+    }
+
+    @Test fun routesSearchSuggestionsAndResults() {
+        assertEquals(TikTokGuest.destination("طبخ", true), TikTokGuest.navigation("https://www.tiktok.com/search?q=%D8%B7%D8%A8%D8%AE"))
+        assertEquals("https://www.tiktok.com/@food", TikTokGuest.navigation("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.tiktok.com%2F%40food"))
+        assertNull(TikTokGuest.navigation("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com"))
     }
 
     @Test fun opensHandlesAndRestrictsLinks() {
