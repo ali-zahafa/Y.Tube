@@ -34,6 +34,15 @@ internal object TikTokFiles {
         }
     }
 
+    fun downloadAudio(context: Context, url: String, dest: Uri) {
+        val video = File.createTempFile("tiktok-", ".mp4", context.cacheDir)
+        try {
+            val cached = Uri.fromFile(video)
+            saveVideo(context, url, cached)
+            saveAudio(context, cached, dest)
+        } finally { video.delete() }
+    }
+
     fun saveAudio(context: Context, source: Uri, dest: Uri) {
         require(source != dest)
         val tmp = File.createTempFile("audio-", ".m4a", context.cacheDir)

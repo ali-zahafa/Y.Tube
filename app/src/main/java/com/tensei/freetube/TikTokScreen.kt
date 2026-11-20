@@ -33,6 +33,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var source by rememberSaveable { mutableStateOf<String?>(null) }
     var offered by rememberSaveable { mutableStateOf<String?>(null) }
+    var chooseFormat by rememberSaveable { mutableStateOf(false) }
     var canGoBack by remember { mutableStateOf(false) }
     val view = remember {
         WebPlaybackSession.view?.takeIf { WebPlaybackSession.videoId == "tiktok-guest" }
@@ -87,6 +88,25 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
         offered = null
     }
 
+    val audioDownload = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/mp4")) { dst ->
+        val url = offered
+        if (url != null && dst != null) work({ TikTokFiles.downloadAudio(context, url, dst); "" },
+            { message = label("Audio saved.", "تم حفظ الصوت.") }, label("Could not save AAC audio.", "تعذّر حفظ صوت AAC."))
+        offered = null
+    }
+    if (chooseFormat) AlertDialog(
+        onDismissRequest = { chooseFormat = false; offered = null },
+        title = { Text(label("Save download as", "حفظ التنزيل بصيغة")) },
+        confirmButton = { TextButton(onClick = {
+            chooseFormat = false
+            download.launch("freetube-video.mp4")
+        }) { Text("MP4") } },
+        dismissButton = { TextButton(onClick = {
+            chooseFormat = false
+            audioDownload.launch("freetube-audio.m4a")
+        }) { Text("M4A") } }
+    )
+
     DisposableEffect(view) {
         if (WebPlaybackSession.view === view) WebPlaybackSession.attached = true
         view.webViewClient = object : WebViewClient() {
@@ -100,7 +120,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
         view.setDownloadListener { url, _, _, mime, _ ->
             if (mime?.substringBefore(';') == "video/mp4" && TikTokFiles.downloadable(url)) {
                 offered = url
-                download.launch("freetube-video.mp4")
+                chooseFormat = true
             } else message = label("No supported video download offered.", "الصفحة لم تُتح تنزيل فيديو مدعوم.")
         }
         if (view.url == null && TikTokGuest.allowed(page)) view.loadUrl(page)
