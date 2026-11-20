@@ -23,6 +23,46 @@ class TikTokNavigationTest {
         return null
     }
 
+    @Test fun selectedPublicVideoAdvancesInPlayer() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val device = UiDevice.getInstance(instrumentation)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            device.executeShellCommand("pm grant ${instrumentation.targetContext.packageName} android.permission.POST_NOTIFICATIONS")
+        }
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            requireNotNull(device.wait(Until.findObject(By.text("TikTok")), 20000)).click()
+            val field = requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000))
+            field.text = "https://www.tiktok.com/@scout2015/video/6718335390845095173"
+            requireNotNull(device.wait(Until.findObject(By.text("Search")), 10000)).click()
+            val deadline = android.os.SystemClock.elapsedRealtime() + 45000
+            var firstTime: Double? = null
+            var progress = 0.0
+            var diagnostic = ""
+            while (progress < 1.0 && android.os.SystemClock.elapsedRealtime() < deadline) {
+                val done = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity {
+                    val view = requireNotNull(findPage(it.window.decorView))
+                    view.evaluateJavascript("""(() => {
+                        const v = document.querySelector('video');
+                        if (!v) return document.body?.innerText?.slice(0,160) || 'no video element';
+                        return v.paused ? 'paused; readyState=' + v.readyState : v.currentTime;
+                    })()""") { value ->
+                        diagnostic = value
+                        value.toDoubleOrNull()?.let { time ->
+                            val start = firstTime ?: time
+                            firstTime = start
+                            progress = time - start
+                        }
+                        done.countDown()
+                    }
+                }
+                assertTrue(done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                if (progress < 1.0) Thread.sleep(500)
+            }
+            assertTrue("Public TikTok video did not advance: $diagnostic", progress >= 1.0)
+        }
+    }
+
     @Test fun openTabTypeAndSearch() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)
@@ -39,14 +79,14 @@ class TikTokNavigationTest {
                 assertTrue("TikTok homepage was never requested", web.originalUrl?.startsWith("https://www.tiktok.com/") == true || web.url?.startsWith("https://www.tiktok.com/") == true)
             }
             field.text = "Cooking"
-            val accounts = requireNotNull(device.wait(Until.findObject(By.text("Accounts")), 10000))
+            val accounts = requireNotNull(device.wait(Until.findObject(By.text("Search")), 10000))
             accounts.click()
             val until = android.os.SystemClock.elapsedRealtime() + 10000
             var requested = false
             while (!requested && android.os.SystemClock.elapsedRealtime() < until) {
                 scenario.onActivity {
                     val web = findPage(it.window.decorView)
-                    requested = listOf(web?.originalUrl, web?.url).any { url -> url == TikTokGuest.destination("Cooking", false) }
+                    requested = listOf(web?.originalUrl, web?.url).any { url -> url == TikTokGuest.destination("Cooking") }
                 }
                 if (!requested) Thread.sleep(150)
             }

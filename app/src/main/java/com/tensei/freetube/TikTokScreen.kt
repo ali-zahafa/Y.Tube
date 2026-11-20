@@ -122,6 +122,7 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
                 return true
             }
             override fun onPageStarted(v: WebView, url: String?, icon: android.graphics.Bitmap?) {
+                v.settings.mediaPlaybackRequiresUserGesture = !(url?.startsWith("https://www.tiktok.com/player/v1/") == true || WebPlaybackSession.view === v && WebPlaybackSession.background)
                 loading = true
                 webError = null
             }
@@ -160,8 +161,8 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
             } else view.destroy()
         }
     }
-    fun search(videos: Boolean) {
-        val url = TikTokGuest.destination(query, videos)
+    fun search() {
+        val url = TikTokGuest.destination(query)
         if (url == null) message = label("Enter a name or TikTok link.", "اكتب اسم أو رابط تيك توك.")
         else { keyboard?.hide(); message = ""; page = url; view.loadUrl(url) }
     }
@@ -174,12 +175,11 @@ internal fun TikTokScreen(padding: PaddingValues, onBackground: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(padding).statusBarsPadding()) {
         OutlinedTextField(query, { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { search(false) }),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { search() }),
             supportingText = { Text(label("Public TikTok results via DuckDuckGo", "نتائج تيك توك العامة عبر DuckDuckGo")) },
             label = { Text(label("Name, @username or TikTok link", "اسم، يوزرنيم أو رابط تيك توك")) })
         Row(Modifier.horizontalScroll(rememberScrollState())) {
-            TextButton(onClick = { search(false) }) { Text(label("Accounts", "حسابات")) }
-            TextButton(onClick = { search(true) }) { Text(label("Videos", "فيديوهات")) }
+            TextButton(onClick = { search() }) { Text(label("Search", "بحث")) }
             TextButton(onClick = { photo.launch("image/*") }, enabled = !busy) { Text(label("Read screenshot", "قراءة لقطة شاشة")) }
             TextButton(onClick = { visualSearch.launch("image/*") }) {
                 Text(label("Search image with…", "بحث بالصورة باستخدام…"))
@@ -227,7 +227,20 @@ private const val TIKTOK_SEARCH_EVENTS = """(() => {
     document.addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.isComposing && e.target.matches?.(input)) search(e.target.value, e);
     }, true);
-    document.addEventListener('click', e => {
+    window.addEventListener('click', e => {
+        const anchor = e.target.closest?.('a[href]');
+        const card = e.target.closest?.('[data-e2e="user-post-item"],[data-e2e="user-post-item-list-item"]');
+        const href = anchor?.href || card?.querySelector('a[href*="/video/"]')?.href;
+        if (e.isTrusted && href) {
+            const post = new URL(href, location.href);
+            const match = post.pathname.match(/^\/@[^/]+\/video\/(\d{10,20})\/?$/);
+            if (post.protocol === 'https:' && (post.hostname === 'tiktok.com' || post.hostname.endsWith('.tiktok.com')) && match) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                location.assign('https://www.tiktok.com/player/v1/' + match[1] + '?autoplay=1&controls=1');
+                return;
+            }
+        }
         const option = e.target.closest?.('[role=option],[data-e2e*=suggest-item],[data-e2e*=search-suggest],[data-e2e*=search-history-item]');
         if (!option || !document.querySelector(input) || option.closest('a[href]')) return;
         const text = option.innerText?.trim();

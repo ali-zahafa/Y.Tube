@@ -12,13 +12,20 @@ internal object TikTokGuest {
             (uri.host == "tiktok.com" || uri.host?.endsWith(".tiktok.com") == true)
     }.getOrDefault(false)
 
-    fun destination(input: String, videos: Boolean): String? {
+    private val postPath = Regex("/(?:@[^/]+/video|v|share/video)/([0-9]{10,20})(?:\\.html)?/?")
+
+    private fun playerOrPage(url: String): String {
+        val id = postPath.matchEntire(URI(url).path.orEmpty())?.groupValues?.get(1) ?: return url
+        return "https://www.tiktok.com/player/v1/$id?autoplay=1&controls=1"
+    }
+
+    fun destination(input: String): String? {
         val query = input.trim()
         if (query.isEmpty()) return null
         if (handle.matches(query)) return "https://www.tiktok.com/$query"
-        if (query.contains("://")) return query.takeIf(::allowed)
-        val scope = if (videos) "site:tiktok.com inurl:video" else "site:tiktok.com/@ -inurl:video"
-        return "https://html.duckduckgo.com/html/?q=" + URLEncoder.encode("$scope $query", "UTF-8")
+        if (query.contains("://")) return query.takeIf(::allowed)?.let(::playerOrPage)
+        val terms = if (query.substringAfterLast(' ').equals("tiktok", true)) query else "$query tiktok"
+        return "https://html.duckduckgo.com/html/?q=" + URLEncoder.encode(terms, "UTF-8")
     }
 
     fun indexPage(url: String): Boolean = runCatching {
@@ -32,10 +39,11 @@ internal object TikTokGuest {
             ?.substringAfter('=', "")?.let { URLDecoder.decode(it, "UTF-8") }
         when {
             allowed(url) && (u.path == "/search" || u.path.startsWith("/search/")) ->
-                parameter("q")?.takeIf { it.isNotBlank() }?.let { destination(it, u.path != "/search/user") } ?: url
-            allowed(url) || indexPage(url) -> url
+                parameter("q")?.takeIf { it.isNotBlank() }?.let { destination(it) } ?: url
+            allowed(url) -> playerOrPage(url)
+            indexPage(url) -> url
             u.scheme == "https" && u.rawAuthority in listOf("duckduckgo.com", "html.duckduckgo.com") && u.path == "/l/" ->
-                parameter("uddg")?.takeIf(::allowed)
+                parameter("uddg")?.takeIf(::allowed)?.let(::playerOrPage)
             else -> null
         }
     }.getOrNull()
