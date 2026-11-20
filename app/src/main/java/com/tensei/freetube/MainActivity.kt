@@ -309,12 +309,10 @@ enum class Tab(val defaultLabel: String, val icon: ImageVector, val selectedIcon
     Music("Music", Icons.Outlined.MusicNote, Icons.Rounded.MusicNote),
     Shorts("Shorts", Icons.Outlined.PlayCircle, Icons.Rounded.PlayCircle),
     Library("Library", Icons.Outlined.VideoLibrary, Icons.Rounded.VideoLibrary),
-    Downloads("Saved", Icons.Outlined.Download, Icons.Rounded.Download),
-    TikTok("TikTok", Icons.Outlined.Subscriptions, Icons.Rounded.Subscriptions);
+    Downloads("Saved", Icons.Outlined.Download, Icons.Rounded.Download);
 
     val label: String
         get() = when (this) {
-            TikTok -> defaultLabel
             Home -> I18n.t("tab_home", defaultLabel)
             Music -> I18n.t("tab_music", defaultLabel)
             Shorts -> I18n.t("tab_shorts", defaultLabel)
@@ -729,9 +727,6 @@ fun FreeTubeApp() {
             label = "tabs",
         ) { t ->
             when (t) {
-                Tab.TikTok -> TikTokScreen(contentPadding, onBackground = {
-                    activity.moveTaskToBack(true)
-                })
                 Tab.Home -> HomeScreen(
                     lib, contentPadding, onOpen = player::open, onSearch = { openSearch = true },
                     onSignIn = { signingIn = true }, onAccount = { openSettings = true },

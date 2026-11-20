@@ -50,7 +50,7 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = if (providers.gradleProperty("tiktokPreview").orNull == "true") ".preview.tiktok" else ".preview"
+            applicationIdSuffix = ".preview"
         }
         release {
             isMinifyEnabled = true
@@ -127,7 +127,6 @@ dependencies {
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
-    implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
     implementation(composeBom)
     implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.activity:activity-compose:1.13.0")
